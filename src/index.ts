@@ -51,6 +51,7 @@ async function handleMeta(
         skipChecks: flags['skip-checks'] === true,
         stream: format === 'human',
         verbose: flags.verbose === true,
+        force: flags.force === true,
       })
 
       if (format === 'json') {

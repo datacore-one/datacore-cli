@@ -90,6 +90,8 @@ export interface InitOptions {
   stream?: boolean
   /** Show verbose output (PIDs, log paths) */
   verbose?: boolean
+  /** Force re-initialization (init git in non-empty dirs, re-run all steps) */
+  force?: boolean
 }
 
 export interface InitResult {
@@ -168,6 +170,54 @@ function runArgs(cmd: string, args: string[], opts?: { cwd?: string; timeout?: n
   } catch {
     return false
   }
+}
+
+/** Like runArgs but returns stderr on failure for diagnostic messages. */
+function runArgsWithError(cmd: string, args: string[], opts?: { cwd?: string; timeout?: number }): { ok: boolean; stderr?: string } {
+  try {
+    execFileSync(cmd, args, { stdio: 'pipe', cwd: opts?.cwd, timeout: opts?.timeout })
+    return { ok: true }
+  } catch (err) {
+    const stderr = (err as { stderr?: Buffer | string })?.stderr?.toString().trim() || ''
+    return { ok: false, stderr }
+  }
+}
+
+/**
+ * Initialize git in an existing non-empty directory by fetching from remote.
+ * Used when git clone fails because the directory already has content.
+ */
+function initGitInDir(repoUrl: string, dir: string, timeout = 300000): { ok: boolean; stderr?: string } {
+  let r = runArgsWithError('git', ['init'], { cwd: dir, timeout: 30000 })
+  if (!r.ok) return r
+
+  // Add origin (set-url if it already exists from a previous attempt)
+  r = runArgsWithError('git', ['remote', 'add', 'origin', repoUrl], { cwd: dir, timeout: 5000 })
+  if (!r.ok) {
+    r = runArgsWithError('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: dir, timeout: 5000 })
+    if (!r.ok) return r
+  }
+
+  r = runArgsWithError('git', ['fetch', 'origin'], { cwd: dir, timeout })
+  if (!r.ok) return r
+
+  // Determine default branch from remote HEAD
+  const headRef = runArgsOutput('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { timeout: 5000 })
+  const branch = headRef?.replace('refs/remotes/origin/', '') || 'main'
+
+  // Reset index to match remote (preserves working tree as-is)
+  r = runArgsWithError('git', ['reset', `origin/${branch}`], { cwd: dir, timeout: 30000 })
+  if (!r.ok) return r
+
+  // Set up branch tracking
+  runArgs('git', ['branch', '-M', branch], { cwd: dir })
+  runArgs('git', ['branch', '--set-upstream-to', `origin/${branch}`], { cwd: dir })
+
+  // Checkout repo files - restores any missing system files from remote
+  // Tracked files that exist locally and differ will be overwritten (intended for --force)
+  runArgs('git', ['checkout', '--', '.'], { cwd: dir, timeout: 60000 })
+
+  return { ok: true }
 }
 
 function runArgsOutput(cmd: string, args: string[], opts?: { timeout?: number }): string {
@@ -432,7 +482,7 @@ export function isInitialized(): boolean {
  * Initialize a new Datacore installation.
  */
 export async function initDatacore(options: InitOptions = {}): Promise<InitResult> {
-  const { nonInteractive = false, skipChecks = false, stream = false, verbose = false } = options
+  const { nonInteractive = false, skipChecks = false, stream = false, verbose = false, force = false } = options
   const isTTY = stream && process.stdout.isTTY
   const interactive = isTTY && !nonInteractive
   const platform = detectPlatform()
@@ -679,111 +729,176 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     }
 
     const ghAuth = checkGhAuth()
+    const upstreamUrl = `https://github.com/${UPSTREAM_REPO}.git`
 
-    if (existsSync(join(DATA_DIR, '.git'))) {
-      // Already a git repo
+    // ── Phase 1: Ensure fork exists (if gh is authenticated) ──────────
+    let ghUser: string | undefined
+
+    if (ghAuth.available) {
+      ghUser = ghAuth.user || runArgsOutput('gh', ['api', 'user', '-q', '.login'], { timeout: 15000 })
+
+      const forkSpinner = isTTY ? new Spinner('Checking fork...') : null
+      forkSpinner?.start()
+
+      const forkExists = runArgs('gh', ['repo', 'view', `${ghUser}/datacore`], { cwd: process.env.HOME, timeout: 30000 })
+
+      if (!forkExists) {
+        forkSpinner?.update('Forking repository...')
+        const forked = runArgs('gh', ['repo', 'fork', UPSTREAM_REPO, '--clone=false'], { timeout: 30000 })
+        if (forked) {
+          forkSpinner?.succeed(`Forked to ${ghUser}/datacore`)
+        } else {
+          forkSpinner?.fail('Fork failed (will clone upstream directly)')
+          result.warnings.push('Could not fork repository - will clone directly')
+          ghUser = undefined
+        }
+      } else {
+        forkSpinner?.succeed(`Fork exists: ${ghUser}/datacore`)
+      }
+    }
+
+    // Build ordered list of URLs to try (fork HTTPS, fork SSH, upstream HTTPS, upstream SSH)
+    const cloneUrls: string[] = []
+    if (ghUser) {
+      cloneUrls.push(`https://github.com/${ghUser}/datacore.git`)
+      cloneUrls.push(`git@github.com:${ghUser}/datacore.git`)
+    }
+    if (!ghAuth.available && interactive) {
+      const customUrl = await prompt('  Repository URL', upstreamUrl)
+      cloneUrls.push(customUrl)
+      const sshUrl = customUrl.replace('https://github.com/', 'git@github.com:')
+      if (sshUrl !== customUrl) cloneUrls.push(sshUrl)
+    } else {
+      cloneUrls.push(upstreamUrl)
+      cloneUrls.push(`git@github.com:${UPSTREAM_REPO}.git`)
+    }
+
+    if (!ghAuth.available && interactive) {
+      console.log(`  ${c.dim}GitHub CLI not authenticated. Cloning upstream directly.${c.reset}`)
+      console.log(`  ${c.dim}You can fork later with: gh repo fork --remote${c.reset}`)
+      console.log()
+    }
+
+    // ── Phase 2: Ensure ~/Data is a git repository ────────────────────
+    const hasGitDir = existsSync(join(DATA_DIR, '.git'))
+    // A .git dir might exist but be broken (no commits, from a failed init)
+    const hasValidGit = hasGitDir && runArgs('git', ['rev-parse', 'HEAD'], { cwd: DATA_DIR, timeout: 5000 })
+
+    if (hasValidGit) {
+      // ── Case A: Working git repo → pull and verify remotes ──────────
       if (isTTY) console.log(`  ${c.green}✓${c.reset} Found existing repository at ~/Data`)
 
-      const spinner = isTTY ? new Spinner('Pulling latest changes...') : null
-      spinner?.start()
+      const pullSpinner = isTTY ? new Spinner('Pulling latest changes...') : null
+      pullSpinner?.start()
       if (runArgs('git', ['pull', '--rebase', '--autostash'], { cwd: DATA_DIR, timeout: 60000 })) {
-        spinner?.succeed('Repository up to date')
+        pullSpinner?.succeed('Repository up to date')
       } else {
-        spinner?.fail('Pull failed (non-fatal, continuing)')
+        pullSpinner?.fail('Pull failed (non-fatal, continuing)')
         result.warnings.push('Could not pull latest changes')
       }
-    } else if (!existsSync(DATA_DIR) || readdirSync(DATA_DIR).filter(f => !f.startsWith('.')).length === 0) {
-      // Fresh install
-      if (ghAuth.available) {
-        // Fork via gh
-        const spinner = isTTY ? new Spinner('Forking repository...') : null
-        spinner?.start()
 
-        const ghUser = ghAuth.user || runArgsOutput('gh', ['api', 'user', '-q', '.login'], { timeout: 15000 })
-        const forkExists = runArgs('gh', ['repo', 'view', `${ghUser}/datacore`], { cwd: process.env.HOME, timeout: 30000 })
+      // Verify remotes are correct
+      const currentUpstream = runArgsOutput('git', ['remote', 'get-url', 'upstream'])
+      if (!currentUpstream) {
+        runArgs('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: DATA_DIR })
+      }
+    } else {
+      // ── Need to set up git ──────────────────────────────────────────
+      mkdirSync(DATA_DIR, { recursive: true })
 
-        if (!forkExists) {
-          const forked = runArgs('gh', ['repo', 'fork', UPSTREAM_REPO, '--clone=false'], { timeout: 30000 })
-          if (forked) {
-            spinner?.succeed(`Forked to ${ghUser}/datacore`)
-          } else {
-            spinner?.fail('Fork failed')
-            result.warnings.push('Could not fork repository - will clone directly')
+      // Try clone first (works for empty or non-existent dirs)
+      const cloneSpinner = isTTY ? new Spinner('Cloning into ~/Data...') : null
+      cloneSpinner?.start()
+
+      let lastCloneErr = ''
+      let cloned = false
+      for (const url of cloneUrls) {
+        const r = runArgsWithError('git', ['clone', url, '.'], { cwd: DATA_DIR, timeout: 300000 })
+        if (r.ok) {
+          cloned = true
+          break
+        }
+        lastCloneErr = r.stderr || ''
+        // If dir is not empty, clone can't work with any URL - stop trying
+        if (lastCloneErr.includes('already exists and is not an empty directory')) break
+      }
+
+      if (cloned) {
+        cloneSpinner?.succeed('Cloned into ~/Data')
+        result.created.push(DATA_DIR)
+        if (ghUser) {
+          runArgs('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: DATA_DIR })
+        }
+      } else if (lastCloneErr.includes('already exists and is not an empty directory')) {
+        // ── Case C: Directory not empty → need git init approach ──────
+        if (!force) {
+          cloneSpinner?.fail('~/Data is not empty')
+          const entries = readdirSync(DATA_DIR)
+          if (isTTY) {
+            console.log(`    ${c.dim}~/Data contains ${entries.length} items but is not a git repository.${c.reset}`)
+            console.log(`    ${c.dim}Use --force to initialize git in the existing directory.${c.reset}`)
+            console.log(`    ${c.dim}Or remove/rename ~/Data for a fresh install.${c.reset}`)
+          }
+          result.errors.push('~/Data exists and is not empty. Use --force to re-initialize.')
+          op.failStep('clone_repo', 'Directory not empty')
+          op.fail('~/Data is not empty')
+          return result
+        }
+
+        // --force: initialize git in the existing directory
+        cloneSpinner?.update('Initializing git in existing ~/Data...')
+
+        let initOk = false
+        let lastInitErr = ''
+        for (const url of cloneUrls) {
+          const r = initGitInDir(url, DATA_DIR)
+          if (r.ok) {
+            initOk = true
+            break
+          }
+          lastInitErr = r.stderr || ''
+        }
+
+        if (initOk) {
+          cloneSpinner?.succeed('Git initialized in existing ~/Data')
+          if (ghUser) {
+            runArgs('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: DATA_DIR })
           }
         } else {
-          spinner?.succeed(`Fork exists: ${ghUser}/datacore`)
-        }
-
-        // Clone the fork
-        const cloneSpinner = isTTY ? new Spinner('Cloning into ~/Data...') : null
-        cloneSpinner?.start()
-
-        mkdirSync(DATA_DIR, { recursive: true })
-
-        const cloneUrl = `https://github.com/${ghUser}/datacore.git`
-        let cloned = runArgs('git', ['clone', cloneUrl, '.'], { cwd: DATA_DIR, timeout: 300000 })
-        if (!cloned) {
-          cloned = runArgs('git', ['clone', `git@github.com:${ghUser}/datacore.git`, '.'], { cwd: DATA_DIR, timeout: 300000 })
-        }
-        if (!cloned) {
-          cloned = runArgs('git', ['clone', `https://github.com/${UPSTREAM_REPO}.git`, '.'], { cwd: DATA_DIR, timeout: 300000 })
-          if (!cloned) {
-            cloned = runArgs('git', ['clone', `git@github.com:${UPSTREAM_REPO}.git`, '.'], { cwd: DATA_DIR, timeout: 300000 })
+          cloneSpinner?.fail('Could not initialize git')
+          result.errors.push(`Git init failed: ${lastInitErr}`)
+          if (lastInitErr.includes('Authentication') || lastInitErr.includes('403') || lastInitErr.includes('401')) {
+            if (isTTY) console.log(`    ${c.dim}Check your GitHub access: gh auth status${c.reset}`)
           }
-        }
-
-        if (cloned) {
-          cloneSpinner?.succeed('Cloned into ~/Data')
-          result.created.push(DATA_DIR)
-          runArgs('git', ['remote', 'add', 'upstream', `https://github.com/${UPSTREAM_REPO}.git`], { cwd: DATA_DIR })
-        } else {
-          cloneSpinner?.fail('Clone failed')
-          result.errors.push('Could not clone repository')
-          op.failStep('clone_repo', 'Clone failed')
-          op.fail('Clone failed')
+          op.failStep('clone_repo', 'Git init failed')
+          op.fail('Git init failed')
           return result
         }
       } else {
-        // No gh auth - clone directly or prompt for URL
-        let repoUrl: string
-        if (interactive) {
-          console.log(`  ${c.dim}GitHub CLI not authenticated. Cloning upstream directly.${c.reset}`)
-          console.log(`  ${c.dim}You can fork later with: gh repo fork --remote${c.reset}`)
-          console.log()
-          repoUrl = await prompt('  Repository URL', `https://github.com/${UPSTREAM_REPO}.git`)
+        // ── Clone failed for other reasons (auth, repo not found, etc.)
+        cloneSpinner?.fail('Clone failed')
+        if (lastCloneErr.includes('not found') || lastCloneErr.includes('not exist') || lastCloneErr.includes('does not appear to be a git repository')) {
+          result.errors.push('Repository not found')
+          if (isTTY) {
+            if (ghUser) {
+              console.log(`    ${c.dim}Neither ${ghUser}/datacore nor ${UPSTREAM_REPO} could be cloned.${c.reset}`)
+            }
+            console.log(`    ${c.dim}Ensure you have access to ${UPSTREAM_REPO} and try again.${c.reset}`)
+            console.log(`    ${c.dim}Check access: gh repo view ${UPSTREAM_REPO}${c.reset}`)
+          }
+        } else if (lastCloneErr.includes('Authentication') || lastCloneErr.includes('Permission') || lastCloneErr.includes('403') || lastCloneErr.includes('401')) {
+          result.errors.push('Authentication failed')
+          if (isTTY) {
+            console.log(`    ${c.dim}Could not authenticate with GitHub.${c.reset}`)
+            console.log(`    ${c.dim}Try: gh auth login${c.reset}`)
+          }
         } else {
-          repoUrl = `https://github.com/${UPSTREAM_REPO}.git`
+          result.errors.push(`Clone failed: ${lastCloneErr}`)
         }
-
-        mkdirSync(DATA_DIR, { recursive: true })
-
-        const spinner = isTTY ? new Spinner('Cloning into ~/Data...') : null
-        spinner?.start()
-
-        let cloned = runArgs('git', ['clone', repoUrl, '.'], { cwd: DATA_DIR, timeout: 300000 })
-        if (!cloned) {
-          const sshUrl = repoUrl.replace('https://github.com/', 'git@github.com:')
-          cloned = runArgs('git', ['clone', sshUrl, '.'], { cwd: DATA_DIR, timeout: 300000 })
-        }
-
-        if (cloned) {
-          spinner?.succeed('Cloned into ~/Data')
-          result.created.push(DATA_DIR)
-        } else {
-          spinner?.fail('Clone failed')
-          result.errors.push(`Could not clone from ${repoUrl}`)
-          op.failStep('clone_repo', 'Clone failed')
-          op.fail('Clone failed')
-          return result
-        }
+        op.failStep('clone_repo', 'Clone failed')
+        op.fail('Clone failed')
+        return result
       }
-    } else {
-      // ~/Data exists with content but no .git
-      if (isTTY) {
-        console.log(`  ${c.yellow}⚠${c.reset} ~/Data exists but is not a git repository`)
-        console.log(`    ${c.dim}Expected a cloned Datacore repo. Some features may not work.${c.reset}`)
-      }
-      result.warnings.push(`${DATA_DIR} is not a git repository`)
     }
 
     // Clone DIPs repo (tracked as gitlink, not auto-cloned)

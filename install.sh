@@ -89,5 +89,7 @@ else
 fi
 
 echo ""
-echo "  Done! Run 'datacore init' to get started."
+echo "  Starting Datacore setup..."
 echo ""
+
+datacore init

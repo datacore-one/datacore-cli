@@ -116,9 +116,9 @@ function checkNode(platform: Platform): DependencyCheck {
 
   if (installed) {
     version = getVersion('node', '-v')
-    // Check >= 18
+    // Check >= 20 (glob@11, jackspeak@4 etc require Node 20+)
     const major = parseInt(version?.replace('v', '').split('.')[0] ?? '0', 10)
-    meetsMin = major >= 18
+    meetsMin = major >= 20
   }
 
   return {

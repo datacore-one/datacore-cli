@@ -5,15 +5,16 @@ CLI for setting up and managing Datacore installations - an AI-powered second br
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/datacore-one/datacore-cli/main/install.sh | bash
+curl -fsSL https://datacore.one/install | bash
 ```
 
-This handles everything: installs/upgrades Node.js if needed, then installs the CLI.
+This handles everything: installs/upgrades Node.js if needed, installs the CLI, and starts the setup wizard.
 
 Or if you already have Node.js 20+:
 
 ```bash
 npm install -g @datacore-one/cli
+datacore init
 ```
 
 ## Quick Start

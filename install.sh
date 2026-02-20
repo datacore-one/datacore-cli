@@ -51,13 +51,22 @@ else
             brew install node
         fi
     elif [ "$OS" = "linux" ]; then
-        if command -v npm &> /dev/null; then
+        node_installed=false
+
+        # Try n (node version manager) if npm is available to sudo
+        if sudo -n npm --version &> /dev/null 2>&1; then
             echo "  Installing Node.js LTS via n (node version manager)..."
-            sudo npm install -g n 2>/dev/null
-            sudo n lts
-            # Refresh shell hash so new node is found
-            hash -r 2>/dev/null || true
-        else
+            if sudo npm install -g n && sudo n lts; then
+                node_installed=true
+                # Refresh shell hash so new node is found
+                hash -r 2>/dev/null || true
+            else
+                echo "  n installation failed, falling back to NodeSource..."
+            fi
+        fi
+
+        # Fallback to NodeSource
+        if [ "$node_installed" = false ]; then
             echo "  Installing Node.js LTS via NodeSource..."
             curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
             sudo apt-get install -y nodejs

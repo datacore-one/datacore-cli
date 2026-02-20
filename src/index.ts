@@ -17,7 +17,7 @@ import { initDatacore, isInitialized } from './lib/init'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
 
-const VERSION = '1.0.9'
+const VERSION = '1.0.10'
 
 const args = process.argv.slice(2)
 const parsed = parseArgs(args)

@@ -11,11 +11,11 @@ MIN_NODE=20
 # Detect OS
 if [[ "$OSTYPE" == "darwin"* ]]; then
     OS="macos"
-elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+elif [[ "$OSTYPE" == "linux"* ]]; then
     OS="linux"
 else
-    echo "Unsupported OS: $OSTYPE"
-    echo "Please install manually: npm install -g @datacore-one/cli"
+    echo "  Unsupported OS: $OSTYPE"
+    echo "  Please install manually: npm install -g @datacore-one/cli"
     exit 1
 fi
 
@@ -25,6 +25,24 @@ get_node_major() {
         node --version | sed 's/v//' | cut -d. -f1
     else
         echo "0"
+    fi
+}
+
+# Check if npm global install needs sudo (nvm doesn't, system node does)
+needs_sudo_for_npm() {
+    if [ -n "${NVM_DIR:-}" ] || [[ "$(command -v node 2>/dev/null)" == *".nvm"* ]]; then
+        return 1
+    fi
+    local prefix
+    prefix=$(npm config get prefix 2>/dev/null) || return 0
+    [ ! -w "$prefix/lib" ] 2>/dev/null
+}
+
+npm_global_install() {
+    if needs_sudo_for_npm; then
+        sudo npm install -g "$@"
+    else
+        npm install -g "$@"
     fi
 }
 
@@ -51,26 +69,10 @@ else
             brew install node
         fi
     elif [ "$OS" = "linux" ]; then
-        node_installed=false
-
-        # Try n (node version manager) if npm is available to sudo
-        if sudo -n npm --version &> /dev/null 2>&1; then
-            echo "  Installing Node.js LTS via n (node version manager)..."
-            if sudo npm install -g n && sudo n lts; then
-                node_installed=true
-                # Refresh shell hash so new node is found
-                hash -r 2>/dev/null || true
-            else
-                echo "  n installation failed, falling back to NodeSource..."
-            fi
-        fi
-
-        # Fallback to NodeSource
-        if [ "$node_installed" = false ]; then
-            echo "  Installing Node.js LTS via NodeSource..."
-            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-            sudo apt-get install -y nodejs
-        fi
+        echo "  Installing Node.js LTS via NodeSource..."
+        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+        hash -r 2>/dev/null || true
     fi
 
     # Verify
@@ -91,10 +93,20 @@ echo ""
 echo "  Installing @datacore-one/cli..."
 echo ""
 
-if [ "$OS" = "linux" ]; then
-    sudo npm install -g @datacore-one/cli@latest
-else
-    npm install -g @datacore-one/cli@latest
+npm_global_install @datacore-one/cli@latest
+
+# Verify the binary is available
+hash -r 2>/dev/null || true
+
+if ! command -v datacore &> /dev/null; then
+    echo ""
+    echo "  @datacore-one/cli installed but 'datacore' not found in PATH."
+    NPM_BIN=$(npm config get prefix 2>/dev/null)/bin
+    echo "  Add npm global bin to your PATH:"
+    echo "    export PATH=\"$NPM_BIN:\$PATH\""
+    echo ""
+    echo "  Then run: datacore init"
+    exit 0
 fi
 
 echo ""

@@ -14,6 +14,7 @@ import { loadConfig, getConfigValue, setConfigValue, getAllConfig } from './conf
 import { listSpaces, createSpace } from './lib/space'
 import { pullAll, pushAll, statusAll } from './lib/sync'
 import { initDatacore, isInitialized } from './lib/init'
+import { updateDatacore, upgradeDatacore } from './lib/upgrade'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
 
@@ -36,12 +37,12 @@ async function handleMeta(
     case 'init': {
       if (isInitialized() && !flags.force) {
         if (format === 'json') {
-          output({ success: true, message: 'Datacore already initialized', hint: 'Use --force to re-initialize or run datacore doctor' }, format)
+          output({ success: true, message: 'Datacore already initialized', hint: 'Use datacore update/upgrade or --force to re-initialize' }, format)
         } else {
           info('Datacore already initialized at ~/Data')
-          info('Run datacore doctor to check health')
-          info('Run datacore module list to see modules')
-          info('Use --force to re-run the setup wizard')
+          info('Run datacore update to pull latest changes')
+          info('Run datacore upgrade to apply new features')
+          info('Use --force to re-run the full setup wizard')
         }
         break
       }
@@ -88,6 +89,117 @@ async function handleMeta(
         } else {
           errorLog('Initialization failed')
           for (const e of result.errors) {
+            console.error(`  ${e}`)
+          }
+          process.exitCode = 1
+        }
+      }
+      break
+    }
+
+    case 'update': {
+      if (!isInitialized()) {
+        if (format === 'json') {
+          output({ success: false, error: 'Datacore not initialized. Run: datacore init' }, format)
+        } else {
+          errorLog('Datacore not initialized')
+          info('Run: datacore init')
+        }
+        process.exitCode = 1
+        break
+      }
+
+      const updateResult = await updateDatacore({
+        stream: format === 'human',
+        skipModules: flags['skip-modules'] === true,
+      })
+
+      if (format === 'json') {
+        output(updateResult, format)
+      } else {
+        if (updateResult.success) {
+          if (updateResult.updated.length > 0) {
+            success('Update complete')
+            console.log()
+            console.log('Updated:')
+            for (const item of updateResult.updated) {
+              console.log(`  + ${item}`)
+            }
+          } else {
+            success('Everything up to date')
+          }
+
+          if (updateResult.available.length > 0) {
+            console.log()
+            console.log('New versions available:')
+            for (const pkg of updateResult.available) {
+              const current = pkg.current ? `${pkg.current} -> ` : ''
+              console.log(`  ${pkg.name}: ${current}${pkg.latest}`)
+            }
+            console.log()
+            info('Update packages, then run: datacore upgrade')
+          }
+
+          if (updateResult.warnings.length > 0) {
+            console.log()
+            console.log('Warnings:')
+            for (const w of updateResult.warnings) {
+              warn(w)
+            }
+          }
+        } else {
+          errorLog('Update failed')
+          for (const e of updateResult.errors) {
+            console.error(`  ${e}`)
+          }
+          process.exitCode = 1
+        }
+      }
+      break
+    }
+
+    case 'upgrade': {
+      if (!isInitialized()) {
+        if (format === 'json') {
+          output({ success: false, error: 'Datacore not initialized. Run: datacore init' }, format)
+        } else {
+          errorLog('Datacore not initialized')
+          info('Run: datacore init')
+        }
+        process.exitCode = 1
+        break
+      }
+
+      const upgradeResult = await upgradeDatacore({
+        stream: format === 'human',
+        skipDeps: flags['skip-deps'] === true,
+      })
+
+      if (format === 'json') {
+        output(upgradeResult, format)
+      } else {
+        if (upgradeResult.success) {
+          if (upgradeResult.upgraded.length > 0) {
+            success('Upgrade complete')
+            console.log()
+            console.log('Updated:')
+            for (const item of upgradeResult.upgraded) {
+              console.log(`  + ${item}`)
+            }
+          } else {
+            success('Already up to date')
+          }
+
+          if (upgradeResult.warnings.length > 0) {
+            console.log()
+            console.log('Warnings:')
+            for (const w of upgradeResult.warnings) {
+              warn(w)
+            }
+          }
+        } else {
+          errorLog('Upgrade failed')
+          for (const e of upgradeResult.errors) {
             console.error(`  ${e}`)
           }
           process.exitCode = 1

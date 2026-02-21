@@ -17,6 +17,8 @@ export type Resource = typeof RESOURCES[number]
 // Meta commands (single word): datacore <command>
 export const META_COMMANDS = [
   'init',
+  'update',
+  'upgrade',
   'doctor',
   'ingest',
   'sync',

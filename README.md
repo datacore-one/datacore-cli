@@ -50,6 +50,8 @@ The MCP server (`@datacore-one/mcp`) is installed and configured for both Claude
 | Command | Description |
 |---------|-------------|
 | `datacore init` | Interactive setup wizard |
+| `datacore update` | Fetch latest repos, modules, check versions |
+| `datacore upgrade` | Apply new features and configuration |
 | `datacore doctor` | Check dependencies, MCP config, system health |
 | `datacore ingest <path>` | Import files with AI processing |
 

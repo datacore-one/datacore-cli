@@ -461,6 +461,69 @@ function countFiles(dir: string): { total: number; byExt: Record<string, number>
   return { total, byExt }
 }
 
+// ─── Helpers: MCP Configuration ──────────────────────────────────────────────
+
+/**
+ * Configure MCP server for Claude Desktop and Claude Code.
+ * Reads, merges, and writes config files idempotently (preserves existing entries).
+ */
+function configureMcpServer(isTTY: boolean | undefined, result: InitResult): void {
+  const mcpEntry = { command: 'npx', args: ['@datacore-one/mcp'] }
+
+  // 1. Claude Desktop config
+  const home = process.env.HOME || ''
+  const desktopPaths = [
+    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'), // macOS
+    join(home, '.config', 'claude', 'claude_desktop_config.json'), // Linux
+  ]
+
+  for (const configPath of desktopPaths) {
+    try {
+      const dir = join(configPath, '..')
+      if (!existsSync(dir)) continue
+
+      let config: Record<string, unknown> = {}
+      if (existsSync(configPath)) {
+        config = JSON.parse(readFileSync(configPath, 'utf-8'))
+      }
+
+      const servers = (config.mcpServers || {}) as Record<string, unknown>
+      if (!servers.datacore) {
+        servers.datacore = mcpEntry
+        config.mcpServers = servers
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
+        if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server configured (Claude Desktop)`)
+      } else {
+        if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server already configured (Claude Desktop)`)
+      }
+      break // Only configure first matching path
+    } catch {
+      // Skip this path
+    }
+  }
+
+  // 2. Claude Code .mcp.json (in ~/Data)
+  const mcpJsonPath = join(DATA_DIR, '.mcp.json')
+  try {
+    let config: Record<string, unknown> = {}
+    if (existsSync(mcpJsonPath)) {
+      config = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
+    }
+
+    const servers = (config.mcpServers || {}) as Record<string, unknown>
+    if (!servers.datacore) {
+      servers.datacore = mcpEntry
+      config.mcpServers = servers
+      writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2) + '\n')
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server configured (Claude Code)`)
+    } else {
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server already configured (Claude Code)`)
+    }
+  } catch {
+    result.warnings.push('Could not configure MCP server for Claude Code')
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -644,6 +707,15 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       }
       if (!claude.available) {
         result.warnings.push('Claude Code not installed - install with: npm install -g @anthropic-ai/claude-code')
+      }
+
+      // --- Datacore MCP server ---
+      const mcp = await ensureDependency('datacore-mcp', 'datacore-mcp', platform, !!isTTY)
+      if (mcp.available && !mcp.wasInstalled && isTTY) {
+        console.log(`  ${c.green}✓${c.reset} Datacore MCP ${c.dim}(${mcp.version})${c.reset}`)
+      }
+      if (!mcp.available) {
+        result.warnings.push('Datacore MCP not installed - install with: npm install -g @datacore-one/mcp')
       }
 
       // --- python ---
@@ -1474,6 +1546,9 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     } catch {
       result.warnings.push('Could not create snapshot')
     }
+
+    // Configure MCP server for Claude Desktop and Claude Code
+    configureMcpServer(isTTY, result)
 
     if (isTTY) console.log()
     op.completeStep('finalize')

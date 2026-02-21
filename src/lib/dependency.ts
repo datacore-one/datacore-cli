@@ -3,7 +3,7 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { DependencyCheck, DoctorResult } from '../types'
 import { detectPlatform, getInstallCommand, getPlatformInfo, type Platform } from './platform'
@@ -195,6 +195,57 @@ function checkClaude(platform: Platform): DependencyCheck {
   }
 }
 
+function checkMcp(platform: Platform): DependencyCheck {
+  const installed = commandExists('datacore-mcp')
+  return {
+    name: 'datacore-mcp',
+    required: false,
+    installed,
+    version: installed ? getVersion('datacore-mcp', '--version') : undefined,
+    installCommand: installed ? undefined : getInstallCommand('datacore-mcp', platform) ?? undefined,
+  }
+}
+
+export function checkMcpConfig(): { claudeDesktop: boolean; claudeCode: boolean } {
+  // Check Claude Desktop config
+  const home = process.env.HOME || ''
+  const desktopPaths = [
+    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'), // macOS
+    join(home, '.config', 'claude', 'claude_desktop_config.json'), // Linux
+  ]
+
+  let claudeDesktop = false
+  for (const p of desktopPaths) {
+    try {
+      if (existsSync(p)) {
+        const content = JSON.parse(readFileSync(p, 'utf-8'))
+        if (content?.mcpServers?.datacore) {
+          claudeDesktop = true
+          break
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  // Check Claude Code .mcp.json
+  let claudeCode = false
+  const mcpJsonPath = join(home, 'Data', '.mcp.json')
+  try {
+    if (existsSync(mcpJsonPath)) {
+      const content = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
+      if (content?.mcpServers?.datacore) {
+        claudeCode = true
+      }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+
+  return { claudeDesktop, claudeCode }
+}
+
 export function checkDependencies(): DependencyCheck[] {
   const platform = detectPlatform()
 
@@ -205,6 +256,7 @@ export function checkDependencies(): DependencyCheck[] {
     checkPython(platform),
     checkGh(platform),
     checkClaude(platform),
+    checkMcp(platform),
   ]
 }
 
@@ -246,5 +298,6 @@ export function runDoctor(): DoctorResult {
     datacoreExists: datacore.exists,
     dependencies,
     status,
+    mcpConfig: checkMcpConfig(),
   }
 }

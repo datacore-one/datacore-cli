@@ -80,6 +80,13 @@ export function getInstallCommand(pkg: string, platform: Platform): string | nul
       windows: 'npm install -g @anthropic-ai/claude-code',
       unknown: 'npm install -g @anthropic-ai/claude-code',
     },
+    'datacore-mcp': {
+      macos: 'npm install -g @datacore-one/mcp',
+      linux: 'npm install -g @datacore-one/mcp',
+      wsl: 'npm install -g @datacore-one/mcp',
+      windows: 'npm install -g @datacore-one/mcp',
+      unknown: 'npm install -g @datacore-one/mcp',
+    },
   }
 
   return commands[pkg]?.[platform] ?? null

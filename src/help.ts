@@ -111,10 +111,12 @@ Usage:
 Description:
   Interactive wizard that sets up your Datacore second brain:
   1. Creates ~/Data directory structure
-  2. Initializes git repositories
-  3. Generates CLAUDE.md context files
-  4. Creates personal space (0-personal)
-  5. Optionally installs recommended modules
+  2. Installs dependencies (including MCP server)
+  3. Initializes git repositories
+  4. Generates CLAUDE.md context files
+  5. Creates personal space (0-personal)
+  6. Installs modules
+  7. Configures MCP server for persistent AI memory
 
 Options:
   --path <dir>         Installation directory (default: ~/Data)
@@ -151,6 +153,11 @@ Checks:
 
   Recommended:
     - claude       Claude Code CLI for AI features
+    - datacore-mcp MCP server for persistent AI memory
+
+  MCP Server:
+    - Claude Desktop config
+    - Claude Code .mcp.json
 
   Datacore:
     - ~/Data exists

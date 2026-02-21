@@ -17,7 +17,7 @@ import { initDatacore, isInitialized } from './lib/init'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
 
-const VERSION = '1.0.11'
+const VERSION = '1.1.0'
 
 const args = process.argv.slice(2)
 const parsed = parseArgs(args)
@@ -115,7 +115,13 @@ async function handleMeta(
             console.log(`      Install: ${dep.installCommand}`)
           }
         }
-        console.log()
+        if (result.mcpConfig) {
+          console.log('MCP Server:')
+          console.log(`  ${result.mcpConfig.claudeDesktop ? '✓' : '✗'} Claude Desktop config`)
+          console.log(`  ${result.mcpConfig.claudeCode ? '✓' : '✗'} Claude Code .mcp.json`)
+          console.log()
+        }
+
         if (result.status === 'ready') {
           success('System ready for Datacore')
         } else if (result.status === 'missing_required') {

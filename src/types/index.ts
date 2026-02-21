@@ -55,6 +55,7 @@ export interface DoctorResult {
   datacoreExists: boolean
   dependencies: DependencyCheck[]
   status: 'ready' | 'missing_required' | 'missing_recommended'
+  mcpConfig?: { claudeDesktop: boolean; claudeCode: boolean }
 }
 
 export interface SpaceInfo {

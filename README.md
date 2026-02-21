@@ -1,14 +1,22 @@
 # @datacore-one/cli
 
-CLI for setting up and managing Datacore installations - an AI-powered second brain built on GTD methodology.
+Set up and manage your AI second brain.
 
-## Installation
+## Why
+
+Your AI assistant forgets everything between conversations. Your coding patterns, your domain knowledge, your project decisions -- all gone the moment you close the chat.
+
+Datacore changes that. It gives AI assistants persistent memory, structured knowledge, and the ability to learn from every interaction. The CLI sets up the full system in minutes: knowledge base, task management, AI agents, and an MCP server that makes your AI smarter over time.
+
+Everything lives in `~/Data` as plain text files. No databases, no vendor lock-in.
+
+## Quick Start
 
 ```bash
 curl -fsSL https://datacore.one/install | bash
 ```
 
-This handles everything: installs/upgrades Node.js if needed, installs the CLI, and starts the setup wizard.
+This handles everything: installs Node.js if needed, installs the CLI, and starts the setup wizard.
 
 Or if you already have Node.js 20+:
 
@@ -17,75 +25,83 @@ npm install -g @datacore-one/cli
 datacore init
 ```
 
-## Quick Start
+## What Gets Installed
 
-```bash
-# Set up a new Datacore installation
-datacore init
+After `datacore init`, you have:
 
-# Check system status
-datacore doctor
-
-# Then use Claude Code for daily workflow
-cd ~/Data && claude
 ```
+~/Data/
+├── .datacore/           # System config, modules, agents
+├── .mcp.json            # MCP server config (auto-configured)
+├── 0-personal/          # Your personal space
+│   ├── org/             # GTD task management
+│   ├── notes/           # Journals, pages, knowledge
+│   └── 3-knowledge/     # Zettelkasten knowledge base
+├── CLAUDE.md            # AI context (auto-generated)
+└── sync                 # Repo sync script
+```
+
+The MCP server (`@datacore-one/mcp`) is installed and configured for both Claude Desktop and Claude Code, giving your AI structured tools for memory, learning, and knowledge capture.
 
 ## Commands
 
 ### Setup
 
-- `datacore init` - Interactive setup wizard
-- `datacore doctor` - Check dependencies and health
-- `datacore ingest <path>` - Import files with AI processing
+| Command | Description |
+|---------|-------------|
+| `datacore init` | Interactive setup wizard |
+| `datacore doctor` | Check dependencies, MCP config, system health |
+| `datacore ingest <path>` | Import files with AI processing |
 
 ### Admin
 
-- `datacore space create <name>` - Create a new space
-- `datacore space list` - List all spaces
-- `datacore module install <name>` - Install a module
-- `datacore module list` - List modules
-- `datacore module update` - Update all modules
-- `datacore module remove <name>` - Remove a module
-- `datacore config show` - Show settings
-- `datacore config get <key>` - Get a setting
-- `datacore config set <key> <value>` - Set a setting
-- `datacore snapshot create` - Create installation snapshot
-- `datacore snapshot restore` - Restore from snapshot
+| Command | Description |
+|---------|-------------|
+| `datacore space create` | Create a new team or personal space |
+| `datacore space list` | List all spaces |
+| `datacore module install <name>` | Install a module |
+| `datacore module list` | List installed modules |
+| `datacore module update` | Update all modules |
+| `datacore config show` | Show current settings |
+| `datacore snapshot create` | Create installation snapshot |
+| `datacore snapshot restore` | Restore from snapshot |
 
-### Automation (for cron/scripts)
+### Automation
 
-- `datacore sync` - Git sync all repos
-- `datacore today` - Generate daily briefing
-- `datacore tomorrow` - End-of-day wrap-up
-- `datacore nightshift status` - Queue status
-- `datacore nightshift trigger` - Execute queued AI tasks
-- `datacore nightshift queue "task"` - Add task to AI queue
-- `datacore cron install` - Set up scheduled tasks
+| Command | Description |
+|---------|-------------|
+| `datacore sync` | Git sync all repos |
+| `datacore today` | Generate daily briefing |
+| `datacore tomorrow` | End-of-day wrap-up |
+| `datacore nightshift trigger` | Execute queued AI tasks |
+| `datacore cron install` | Set up scheduled tasks |
+
+## After Setup
+
+```bash
+cd ~/Data && claude
+```
+
+This starts Claude Code with full access to your second brain. The MCP server provides structured tools for:
+
+- **Learning** -- create engrams that persist across conversations
+- **Journaling** -- capture daily entries and knowledge notes
+- **Searching** -- find anything in your knowledge base
+- **Task management** -- GTD workflow with AI delegation
 
 ## Architecture
 
-The CLI handles **mechanical/admin** tasks:
-- Setup and configuration
-- Git synchronization
-- Cron job management
-- Module installation
+The CLI handles **setup and admin**: installing dependencies, configuring repos, managing modules, and setting up the MCP server.
 
-**Semantic work** (file routing, knowledge extraction, task processing) is handled by Datacore agents via Claude Code.
+**Daily work** happens through Claude Code, which uses the MCP server and Datacore agents for semantic tasks like file routing, knowledge extraction, and task processing.
 
 ## Development
 
 ```bash
-# Install dependencies
 bun install
-
-# Run in development
-bun run dev
-
-# Run tests
-bun test
-
-# Build
-bun run build
+bun run dev          # Run in development
+bun test             # Run tests (76 tests)
+bun run build        # Build for distribution
 ```
 
 ## License

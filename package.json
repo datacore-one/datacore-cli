@@ -1,6 +1,6 @@
 {
   "name": "@datacore-one/cli",
-  "version": "1.0.11",
+  "version": "1.1.0",
   "description": "CLI for setting up and managing Datacore installations",
   "type": "module",
   "main": "dist/index.js",

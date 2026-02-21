@@ -1,20 +1,17 @@
 /**
- * Update and upgrade an existing Datacore installation.
+ * Update an existing Datacore installation.
  *
- * Two commands, like apt/brew:
+ * Single command that does everything:
+ *   datacore update    - Pull repos, update modules, install MCP,
+ *                        configure Claude, rebuild CLAUDE.md, snapshot
  *
- *   datacore update    - Fetch latest: git pull repos, update modules,
- *                        check for new CLI/MCP versions on npm
- *
- *   datacore upgrade   - Apply changes: install new deps, configure MCP,
- *                        rebuild CLAUDE.md, create snapshot
- *
- * Both are idempotent and safe to run repeatedly.
+ * Idempotent and safe to run repeatedly.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
+import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { updateModules, listModules } from './module'
 import { createSnapshot, saveSnapshot } from './snapshot'
@@ -32,28 +29,15 @@ export interface UpdateOptions {
   stream?: boolean
   /** Skip module updates */
   skipModules?: boolean
+  /** Skip dependency installation */
+  skipDeps?: boolean
+  /** Non-interactive mode (use defaults) */
+  yes?: boolean
 }
 
 export interface UpdateResult {
   success: boolean
   updated: string[]
-  warnings: string[]
-  errors: string[]
-  alreadyCurrent: string[]
-  /** New versions available on npm (not yet installed) */
-  available: Array<{ name: string; current?: string; latest: string }>
-}
-
-export interface UpgradeOptions {
-  /** Stream output (enables display in TTY) */
-  stream?: boolean
-  /** Skip dependency installation */
-  skipDeps?: boolean
-}
-
-export interface UpgradeResult {
-  success: boolean
-  upgraded: string[]
   warnings: string[]
   errors: string[]
   alreadyCurrent: string[]
@@ -100,24 +84,35 @@ function runArgs(cmd: string, args: string[], opts?: { cwd?: string; timeout?: n
   }
 }
 
-/**
- * Check npm registry for latest version of a package.
- */
-async function checkNpmVersion(pkg: string): Promise<string | null> {
-  try {
-    const res = await fetch(`https://registry.npmjs.org/${pkg}/latest`, {
-      signal: AbortSignal.timeout(5000),
+async function prompt(question: string, defaultValue?: string): Promise<string> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+
+  return new Promise((resolve) => {
+    const defaultHint = defaultValue ? ` [${defaultValue}]` : ''
+    rl.question(`${question}${defaultHint}: `, (answer) => {
+      rl.close()
+      resolve(answer.trim() || defaultValue || '')
     })
-    if (!res.ok) return null
-    const data = await res.json() as { version: string }
-    return data.version
-  } catch {
-    return null
+  })
+}
+
+async function choose(question: string, options: string[], defaultIndex = 0): Promise<number> {
+  for (let i = 0; i < options.length; i++) {
+    const marker = i === defaultIndex ? `${c.cyan}>${c.reset}` : ' '
+    console.log(`  ${marker} ${c.cyan}${i + 1}${c.reset}) ${options[i]}`)
   }
+  console.log()
+  const answer = await prompt(question, String(defaultIndex + 1))
+  const num = parseInt(answer, 10)
+  if (num >= 1 && num <= options.length) return num - 1
+  return defaultIndex
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UPDATE — fetch latest from all sources
+// Step 1: Pull repos
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function updateRepos(
@@ -148,6 +143,10 @@ function updateRepos(
 
   if (isTTY) console.log()
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 2: Update modules
+// ═══════════════════════════════════════════════════════════════════════════════
 
 function updateModulesStep(
   isTTY: boolean,
@@ -190,93 +189,14 @@ function updateModulesStep(
   }
 }
 
-async function checkAvailableVersions(
-  isTTY: boolean,
-  result: UpdateResult,
-): Promise<void> {
-  if (isTTY) {
-    console.log(`${c.bold}Package Versions${c.reset}`)
-  }
-
-  // Check CLI version
-  const cliCurrent = getVersionString('datacore', '--version')
-  const cliLatest = await checkNpmVersion('@datacore-one/cli')
-  if (cliLatest && cliCurrent && cliLatest !== cliCurrent) {
-    result.available.push({ name: '@datacore-one/cli', current: cliCurrent, latest: cliLatest })
-    if (isTTY) console.log(`  ${c.cyan}↑${c.reset} CLI ${c.dim}${cliCurrent} → ${cliLatest}${c.reset}  ${c.dim}(npm update -g @datacore-one/cli)${c.reset}`)
-  } else if (cliCurrent) {
-    if (isTTY) console.log(`  ${c.green}✓${c.reset} CLI ${c.dim}(${cliCurrent})${c.reset}`)
-  }
-
-  // Check MCP version
-  const mcpCurrent = getVersionString('datacore-mcp', '--version')
-  const mcpLatest = await checkNpmVersion('@datacore-one/mcp')
-  if (mcpLatest && mcpCurrent && mcpLatest !== mcpCurrent) {
-    result.available.push({ name: '@datacore-one/mcp', current: mcpCurrent, latest: mcpLatest })
-    if (isTTY) console.log(`  ${c.cyan}↑${c.reset} MCP ${c.dim}${mcpCurrent} → ${mcpLatest}${c.reset}  ${c.dim}(npm update -g @datacore-one/mcp)${c.reset}`)
-  } else if (mcpCurrent) {
-    if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP ${c.dim}(${mcpCurrent})${c.reset}`)
-  } else if (!mcpCurrent && mcpLatest) {
-    result.available.push({ name: '@datacore-one/mcp', latest: mcpLatest })
-    if (isTTY) console.log(`  ${c.cyan}+${c.reset} MCP ${c.dim}not installed (${mcpLatest} available)${c.reset}  ${c.dim}(datacore upgrade)${c.reset}`)
-  }
-
-  if (isTTY) console.log()
-}
-
-export async function updateDatacore(options: UpdateOptions = {}): Promise<UpdateResult> {
-  const { stream = false, skipModules = false } = options
-  const isTTY = stream && !!process.stdout.isTTY
-
-  const result: UpdateResult = {
-    success: false,
-    updated: [],
-    warnings: [],
-    errors: [],
-    alreadyCurrent: [],
-    available: [],
-  }
-
-  if (!existsSync(DATACORE_DIR)) {
-    result.errors.push('Datacore not initialized. Run: datacore init')
-    return result
-  }
-
-  if (isTTY) {
-    console.log()
-    console.log(`${c.bold}Updating Datacore...${c.reset}`)
-    console.log()
-  }
-
-  // Step 1: Pull all repos
-  updateRepos(isTTY, result)
-
-  // Step 2: Update modules
-  if (!skipModules) {
-    updateModulesStep(isTTY, result)
-  }
-
-  // Step 3: Check npm for new versions
-  await checkAvailableVersions(isTTY, result)
-
-  // Summary hint
-  if (isTTY && result.available.length > 0) {
-    console.log(`${c.dim}New versions available. Update packages, then run: datacore upgrade${c.reset}`)
-    console.log()
-  }
-
-  result.success = result.errors.length === 0
-  return result
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// UPGRADE — apply structural changes to the installation
+// Step 3: Dependencies (MCP server)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function upgradeDependencies(
   platform: Platform,
   isTTY: boolean,
-  result: UpgradeResult,
+  result: UpdateResult,
 ): void {
   if (isTTY) {
     console.log(`${c.bold}Dependencies${c.reset}`)
@@ -296,7 +216,7 @@ function upgradeDependencies(
         if (commandExists('datacore-mcp')) {
           const version = getVersionString('datacore-mcp', '--version')
           if (isTTY) console.log(`\r  ${c.green}✓${c.reset} datacore-mcp installed ${c.dim}(${version})${c.reset}`)
-          result.upgraded.push('datacore-mcp installed')
+          result.updated.push('datacore-mcp installed')
         } else {
           if (isTTY) console.log(`\r  ${c.yellow}⚠${c.reset} datacore-mcp install completed but not in PATH`)
           result.warnings.push('datacore-mcp installed but not found in PATH')
@@ -320,51 +240,60 @@ function upgradeDependencies(
   if (isTTY) console.log()
 }
 
-function upgradeMcpConfig(
-  isTTY: boolean,
-  result: UpgradeResult,
-): void {
-  if (isTTY) {
-    console.log(`${c.bold}MCP Server Configuration${c.reset}`)
-  }
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 4: MCP configuration
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const mcpEntry = { command: 'npx', args: ['@datacore-one/mcp'] }
+/** MCP config entry using global npm install binary */
+const MCP_ENTRY = { command: 'datacore-mcp' }
+
+type McpTarget = 'code' | 'desktop' | 'both'
+
+function detectClaudeDesktopConfigDir(): string | null {
   const home = process.env.HOME || ''
-
-  // 1. Claude Desktop config
-  const desktopPaths = [
-    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
-    join(home, '.config', 'claude', 'claude_desktop_config.json'),
+  const paths = [
+    join(home, 'Library', 'Application Support', 'Claude'), // macOS
+    join(home, '.config', 'claude'),                         // Linux
   ]
+  for (const dir of paths) {
+    if (existsSync(dir)) return dir
+  }
+  return null
+}
 
-  for (const configPath of desktopPaths) {
-    try {
-      const dir = join(configPath, '..')
-      if (!existsSync(dir)) continue
-
-      let config: Record<string, unknown> = {}
-      if (existsSync(configPath)) {
-        config = JSON.parse(readFileSync(configPath, 'utf-8'))
-      }
-
-      const servers = (config.mcpServers || {}) as Record<string, unknown>
-      if (!servers.datacore) {
-        servers.datacore = mcpEntry
-        config.mcpServers = servers
-        writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
-        if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Desktop configured`)
-        result.upgraded.push('MCP configured for Claude Desktop')
-      } else {
-        if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Desktop ${c.dim}(already configured)${c.reset}`)
-        result.alreadyCurrent.push('MCP: Claude Desktop')
-      }
-      break
-    } catch {
-      // Skip this path
-    }
+function configureMcpForDesktop(isTTY: boolean, result: UpdateResult): boolean {
+  const dir = detectClaudeDesktopConfigDir()
+  if (!dir) {
+    if (isTTY) console.log(`  ${c.dim}○ Claude Desktop not found${c.reset}`)
+    return false
   }
 
-  // 2. Claude Code .mcp.json
+  const configPath = join(dir, 'claude_desktop_config.json')
+  try {
+    let config: Record<string, unknown> = {}
+    if (existsSync(configPath)) {
+      config = JSON.parse(readFileSync(configPath, 'utf-8'))
+    }
+
+    const servers = (config.mcpServers || {}) as Record<string, unknown>
+    if (!servers.datacore) {
+      servers.datacore = MCP_ENTRY
+      config.mcpServers = servers
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Desktop configured`)
+      result.updated.push('MCP configured for Claude Desktop')
+    } else {
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Desktop ${c.dim}(already configured)${c.reset}`)
+      result.alreadyCurrent.push('MCP: Claude Desktop')
+    }
+    return true
+  } catch {
+    result.warnings.push('Could not configure MCP for Claude Desktop')
+    return false
+  }
+}
+
+function configureMcpForCode(isTTY: boolean, result: UpdateResult): boolean {
   const mcpJsonPath = join(DATA_DIR, '.mcp.json')
   try {
     let config: Record<string, unknown> = {}
@@ -374,26 +303,96 @@ function upgradeMcpConfig(
 
     const servers = (config.mcpServers || {}) as Record<string, unknown>
     if (!servers.datacore) {
-      servers.datacore = mcpEntry
+      servers.datacore = MCP_ENTRY
       config.mcpServers = servers
       writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2) + '\n')
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code .mcp.json configured`)
-      result.upgraded.push('MCP configured for Claude Code')
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code configured`)
+      result.updated.push('MCP configured for Claude Code')
     } else {
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code .mcp.json ${c.dim}(already configured)${c.reset}`)
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code ${c.dim}(already configured)${c.reset}`)
       result.alreadyCurrent.push('MCP: Claude Code')
     }
+    return true
   } catch {
     result.warnings.push('Could not configure MCP for Claude Code')
+    return false
+  }
+}
+
+async function upgradeMcpConfig(
+  isTTY: boolean,
+  interactive: boolean,
+  result: UpdateResult,
+): Promise<void> {
+  if (isTTY) {
+    console.log(`${c.bold}MCP Server${c.reset}`)
+  }
+
+  // Check if MCP is even installed
+  if (!commandExists('datacore-mcp')) {
+    if (isTTY) console.log(`  ${c.dim}○ datacore-mcp not installed, skipping configuration${c.reset}`)
+    if (isTTY) console.log()
+    return
+  }
+
+  // Check if already configured everywhere
+  const mcpJsonPath = join(DATA_DIR, '.mcp.json')
+  const codeConfigured = existsSync(mcpJsonPath) &&
+    !!(JSON.parse(readFileSync(mcpJsonPath, 'utf-8')) as Record<string, unknown>).mcpServers &&
+    !!((JSON.parse(readFileSync(mcpJsonPath, 'utf-8')) as Record<string, Record<string, unknown>>).mcpServers?.datacore)
+
+  const desktopDir = detectClaudeDesktopConfigDir()
+  let desktopConfigured = false
+  if (desktopDir) {
+    const desktopPath = join(desktopDir, 'claude_desktop_config.json')
+    try {
+      if (existsSync(desktopPath)) {
+        const cfg = JSON.parse(readFileSync(desktopPath, 'utf-8')) as Record<string, Record<string, unknown>>
+        desktopConfigured = !!cfg.mcpServers?.datacore
+      }
+    } catch { /* ignore */ }
+  }
+
+  // If both (or the only available one) are already configured, just report
+  if (codeConfigured && (desktopConfigured || !desktopDir)) {
+    configureMcpForCode(isTTY, result)
+    if (desktopDir) configureMcpForDesktop(isTTY, result)
+    if (isTTY) console.log()
+    return
+  }
+
+  // Need to configure at least one target
+  let target: McpTarget = 'code' // default
+
+  if (interactive && desktopDir) {
+    // Both Claude Code and Desktop are available — ask user
+    console.log()
+    console.log(`  Where should the MCP server be configured?`)
+    const choice = await choose('  Choose', [
+      'Claude Code (recommended)',
+      'Claude Desktop',
+      'Both',
+    ], 0)
+    target = (['code', 'desktop', 'both'] as const)[choice]
+  } else if (!desktopDir) {
+    target = 'code'
+  }
+
+  if (target === 'code' || target === 'both') {
+    configureMcpForCode(isTTY, result)
+  }
+  if (target === 'desktop' || target === 'both') {
+    configureMcpForDesktop(isTTY, result)
   }
 
   if (isTTY) console.log()
 }
 
-function upgradeDirectories(
-  _isTTY: boolean,
-  result: UpgradeResult,
-): void {
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 5: Runtime directories
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function upgradeDirectories(result: UpdateResult): void {
   const stateDir = join(DATACORE_DIR, 'state')
   const envDir = join(DATACORE_DIR, 'env')
 
@@ -410,13 +409,17 @@ function upgradeDirectories(
   }
 
   if (created) {
-    result.upgraded.push('Runtime directories created')
+    result.updated.push('Runtime directories created')
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 6: Rebuild CLAUDE.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function upgradeClaudeMd(
   isTTY: boolean,
-  result: UpgradeResult,
+  result: UpdateResult,
 ): void {
   if (isTTY) {
     console.log(`${c.bold}Context Files${c.reset}`)
@@ -431,7 +434,7 @@ function upgradeClaudeMd(
 
   if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR, '--all'])) {
     if (isTTY) console.log(`  ${c.green}✓${c.reset} CLAUDE.md rebuilt from layers`)
-    result.upgraded.push('CLAUDE.md rebuilt')
+    result.updated.push('CLAUDE.md rebuilt')
   } else {
     if (isTTY) console.log(`  ${c.yellow}⚠${c.reset} CLAUDE.md rebuild failed`)
     result.warnings.push('Could not rebuild CLAUDE.md')
@@ -440,9 +443,13 @@ function upgradeClaudeMd(
   if (isTTY) console.log()
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 7: Snapshot
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function upgradeSnapshot(
   isTTY: boolean,
-  result: UpgradeResult,
+  result: UpdateResult,
 ): void {
   if (isTTY) {
     console.log(`${c.bold}Snapshot${c.reset}`)
@@ -460,14 +467,19 @@ function upgradeSnapshot(
   if (isTTY) console.log()
 }
 
-export async function upgradeDatacore(options: UpgradeOptions = {}): Promise<UpgradeResult> {
-  const { stream = false, skipDeps = false } = options
+// ═══════════════════════════════════════════════════════════════════════════════
+// Main entry point
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export async function updateDatacore(options: UpdateOptions = {}): Promise<UpdateResult> {
+  const { stream = false, skipModules = false, skipDeps = false, yes = false } = options
   const isTTY = stream && !!process.stdout.isTTY
+  const interactive = isTTY && !yes
   const platform = detectPlatform()
 
-  const result: UpgradeResult = {
+  const result: UpdateResult = {
     success: false,
-    upgraded: [],
+    updated: [],
     warnings: [],
     errors: [],
     alreadyCurrent: [],
@@ -480,27 +492,38 @@ export async function upgradeDatacore(options: UpgradeOptions = {}): Promise<Upg
 
   if (isTTY) {
     console.log()
-    console.log(`${c.bold}Upgrading Datacore installation...${c.reset}`)
+    console.log(`${c.bold}Updating Datacore...${c.reset}`)
     console.log()
   }
 
-  // Step 1: Dependencies
+  // Step 1: Pull all repos
+  updateRepos(isTTY, result)
+
+  // Step 2: Update modules
+  if (!skipModules) {
+    updateModulesStep(isTTY, result)
+  }
+
+  // Step 3: Dependencies (MCP server)
   if (!skipDeps) {
     upgradeDependencies(platform, isTTY, result)
   }
 
-  // Step 2: MCP configuration
-  upgradeMcpConfig(isTTY, result)
+  // Step 4: MCP configuration
+  await upgradeMcpConfig(isTTY, interactive, result)
 
-  // Step 3: Ensure runtime directories
-  upgradeDirectories(isTTY, result)
+  // Step 5: Ensure runtime directories
+  upgradeDirectories(result)
 
-  // Step 4: Rebuild CLAUDE.md
+  // Step 6: Rebuild CLAUDE.md
   upgradeClaudeMd(isTTY, result)
 
-  // Step 5: Snapshot
+  // Step 7: Snapshot
   upgradeSnapshot(isTTY, result)
 
   result.success = result.errors.length === 0
   return result
 }
+
+/** Exported for init.ts to reuse */
+export { MCP_ENTRY, configureMcpForCode, configureMcpForDesktop }

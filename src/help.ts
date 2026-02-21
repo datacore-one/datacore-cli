@@ -14,8 +14,7 @@ Usage:
 
 Setup:
   init                 Set up a new Datacore installation
-  update               Fetch latest repos, modules, check versions
-  upgrade              Apply new features and configuration
+  update               Pull repos, modules, install MCP, rebuild context
   doctor               Check dependencies and system status
   ingest <path>        Import files during setup
 
@@ -46,9 +45,8 @@ Examples:
   datacore init
   datacore ingest ~/Documents/chatgpt-export/
 
-  # Update and upgrade
-  datacore update               # pull repos + modules
-  datacore upgrade              # apply new features
+  # Keep everything up to date
+  datacore update
 
   # Admin
   datacore snapshot create
@@ -66,10 +64,6 @@ export function showResourceHelp(resource: string): void {
   }
   if (resource === 'update') {
     showUpdateHelp()
-    return
-  }
-  if (resource === 'upgrade') {
-    showUpgradeHelp()
     return
   }
   if (resource === 'doctor') {
@@ -92,7 +86,7 @@ export function showResourceHelp(resource: string): void {
   if (!RESOURCES.includes(resource as Resource)) {
     console.log(`Unknown command: ${resource}
 
-Available commands: init, update, upgrade, doctor, ingest, sync, today, tomorrow, space, module, config, nightshift, cron, snapshot
+Available commands: init, update, doctor, ingest, sync, today, tomorrow, space, module, config, nightshift, cron, snapshot
 
 Run 'datacore help' for overview.`)
     return
@@ -117,63 +111,34 @@ For detailed help on an action:
 }
 
 function showUpdateHelp(): void {
-  console.log(`datacore update - Fetch latest repos, modules, and versions
+  console.log(`datacore update - Update your Datacore installation
 
 Usage:
   datacore update [options]
 
 Description:
-  Pulls the latest changes from all git repositories and modules.
-  Also checks npm for new CLI and MCP server versions.
+  Pulls latest code, updates modules, installs new dependencies,
+  configures MCP server, and rebuilds context files.
+  All steps are idempotent — safe to run repeatedly.
 
   Steps:
   1. Git pull all repos (root + spaces)
   2. Git pull all installed modules
-  3. Check npm for new @datacore-one/cli version
-  4. Check npm for new @datacore-one/mcp version
-
-  If new npm versions are found, update them then run:
-    datacore upgrade
+  3. Install/update MCP server (npm install -g @datacore-one/mcp)
+  4. Configure MCP for Claude Code/Desktop (asks on first run)
+  5. Rebuild CLAUDE.md from layers
+  6. Update installation snapshot
 
 Options:
   --skip-modules       Skip module updates
+  --skip-deps          Skip dependency installation
+  --yes, -y            Non-interactive (default to Claude Code)
   --format json        Output as JSON
 
 Examples:
   datacore update
-  datacore update --skip-modules`)
-}
-
-function showUpgradeHelp(): void {
-  console.log(`datacore upgrade - Apply new features and configuration
-
-Usage:
-  datacore upgrade [options]
-
-Description:
-  Applies structural changes from new CLI versions. Installs new
-  dependencies, configures new features, and rebuilds context files.
-  All steps are idempotent — safe to run repeatedly.
-
-  Upgrade steps:
-  1. Install new dependencies (e.g., MCP server)
-  2. Configure MCP server for Claude Desktop and Code
-  3. Ensure runtime directories exist
-  4. Rebuild CLAUDE.md from layers
-  5. Create fresh installation snapshot
-
-  Typical workflow after a CLI update:
-    npm update -g @datacore-one/cli
-    datacore update       # pull repos + modules
-    datacore upgrade      # apply new features
-
-Options:
-  --skip-deps          Skip dependency installation
-  --format json        Output as JSON
-
-Examples:
-  datacore upgrade
-  datacore upgrade --skip-deps`)
+  datacore update --skip-modules
+  datacore update --yes`)
 }
 
 function showInitHelp(): void {

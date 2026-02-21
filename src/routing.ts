@@ -18,7 +18,6 @@ export type Resource = typeof RESOURCES[number]
 export const META_COMMANDS = [
   'init',
   'update',
-  'upgrade',
   'doctor',
   'ingest',
   'sync',

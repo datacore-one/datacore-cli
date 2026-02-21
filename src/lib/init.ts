@@ -468,59 +468,15 @@ function countFiles(dir: string): { total: number; byExt: Record<string, number>
  * Reads, merges, and writes config files idempotently (preserves existing entries).
  */
 function configureMcpServer(isTTY: boolean | undefined, result: InitResult): void {
-  const mcpEntry = { command: 'npx', args: ['@datacore-one/mcp'] }
+  const { configureMcpForCode, configureMcpForDesktop } = require('./upgrade')
+  const updateResult = { updated: [] as string[], warnings: [] as string[], alreadyCurrent: [] as string[] }
 
-  // 1. Claude Desktop config
-  const home = process.env.HOME || ''
-  const desktopPaths = [
-    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'), // macOS
-    join(home, '.config', 'claude', 'claude_desktop_config.json'), // Linux
-  ]
+  configureMcpForDesktop(!!isTTY, updateResult)
+  configureMcpForCode(!!isTTY, updateResult)
 
-  for (const configPath of desktopPaths) {
-    try {
-      const dir = join(configPath, '..')
-      if (!existsSync(dir)) continue
-
-      let config: Record<string, unknown> = {}
-      if (existsSync(configPath)) {
-        config = JSON.parse(readFileSync(configPath, 'utf-8'))
-      }
-
-      const servers = (config.mcpServers || {}) as Record<string, unknown>
-      if (!servers.datacore) {
-        servers.datacore = mcpEntry
-        config.mcpServers = servers
-        writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
-        if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server configured (Claude Desktop)`)
-      } else {
-        if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server already configured (Claude Desktop)`)
-      }
-      break // Only configure first matching path
-    } catch {
-      // Skip this path
-    }
-  }
-
-  // 2. Claude Code .mcp.json (in ~/Data)
-  const mcpJsonPath = join(DATA_DIR, '.mcp.json')
-  try {
-    let config: Record<string, unknown> = {}
-    if (existsSync(mcpJsonPath)) {
-      config = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
-    }
-
-    const servers = (config.mcpServers || {}) as Record<string, unknown>
-    if (!servers.datacore) {
-      servers.datacore = mcpEntry
-      config.mcpServers = servers
-      writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2) + '\n')
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server configured (Claude Code)`)
-    } else {
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} MCP server already configured (Claude Code)`)
-    }
-  } catch {
-    result.warnings.push('Could not configure MCP server for Claude Code')
+  // Transfer warnings to init result
+  for (const w of updateResult.warnings) {
+    result.warnings.push(w)
   }
 }
 

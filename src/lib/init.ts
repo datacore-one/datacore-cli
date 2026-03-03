@@ -97,6 +97,7 @@ export interface InitOptions {
 export interface InitResult {
   success: boolean
   created: string[]
+  configured: string[]
   warnings: string[]
   errors: string[]
   nextSteps: string[]
@@ -480,6 +481,103 @@ function configureMcpServer(isTTY: boolean | undefined, result: InitResult): voi
   }
 }
 
+/**
+ * Ask the user which permission safety level they want for Claude Code.
+ * Writes appropriate `ask` rules to .claude/settings.local.json.
+ */
+async function configurePermissionPreference(result: InitResult): Promise<void> {
+  console.log()
+  console.log(`  ${c.bold}Permission Safety Level${c.reset}`)
+  console.log(`  ${c.dim}Controls which commands Claude asks before running.${c.reset}`)
+  console.log()
+
+  const choice = await choose('  Select safety level', [
+    `Behavioral only     ${c.dim}— trust CLAUDE.md instructions, no extra ask rules${c.reset}`,
+    `Light guardrails     ${c.dim}— ask before rm, force push, reset --hard (recommended)${c.reset}`,
+    `Moderate guardrails  ${c.dim}— also ask before ssh, curl, docker, kill${c.reset}`,
+    `Strict               ${c.dim}— ask before most system commands${c.reset}`,
+  ], 1)
+
+  const askRules: Record<number, string[]> = {
+    0: [],  // Behavioral only — no ask rules
+    1: [    // Light guardrails
+      'Bash(rm *)',
+      'Bash(git push --force *)',
+      'Bash(git push -f *)',
+      'Bash(git reset --hard *)',
+      'Bash(git clean *)',
+      'Bash(git checkout -- *)',
+    ],
+    2: [    // Moderate guardrails
+      'Bash(rm *)',
+      'Bash(git push --force *)',
+      'Bash(git push -f *)',
+      'Bash(git reset --hard *)',
+      'Bash(git clean *)',
+      'Bash(git checkout -- *)',
+      'Bash(ssh *)',
+      'Bash(curl *)',
+      'Bash(docker *)',
+      'Bash(kill *)',
+      'Bash(pkill *)',
+    ],
+    3: [    // Strict
+      'Bash(rm *)',
+      'Bash(git push *)',
+      'Bash(git reset *)',
+      'Bash(git clean *)',
+      'Bash(git checkout -- *)',
+      'Bash(ssh *)',
+      'Bash(scp *)',
+      'Bash(rsync *)',
+      'Bash(curl *)',
+      'Bash(docker *)',
+      'Bash(kill *)',
+      'Bash(pkill *)',
+      'Bash(chmod *)',
+      'Bash(mv *)',
+      'Bash(cp *)',
+    ],
+  }
+
+  const rules = askRules[choice] ?? []
+
+  if (rules.length === 0) {
+    console.log(`  ${c.green}✓${c.reset} No additional safety rules`)
+    return
+  }
+
+  const claudeDir = join(DATA_DIR, '.claude')
+  const settingsPath = join(claudeDir, 'settings.local.json')
+
+  try {
+    if (!existsSync(claudeDir)) {
+      mkdirSync(claudeDir, { recursive: true })
+    }
+
+    let config: Record<string, unknown> = {}
+    if (existsSync(settingsPath)) {
+      config = JSON.parse(readFileSync(settingsPath, 'utf-8'))
+    }
+
+    const permissions = (config.permissions || {}) as Record<string, unknown>
+    const existingAsk = (permissions.ask || []) as string[]
+
+    // Merge without duplicates
+    const merged = [...new Set([...existingAsk, ...rules])]
+    permissions.ask = merged
+    config.permissions = permissions
+
+    writeFileSync(settingsPath, JSON.stringify(config, null, 2) + '\n')
+
+    const label = ['Behavioral only', 'Light guardrails', 'Moderate guardrails', 'Strict'][choice]
+    console.log(`  ${c.green}✓${c.reset} ${label} configured (${rules.length} ask rules)`)
+    result.configured.push(`Permission safety: ${label}`)
+  } catch {
+    result.warnings.push('Could not configure permission safety level')
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -509,6 +607,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
   const result: InitResult = {
     success: false,
     created: [],
+    configured: [],
     warnings: [],
     errors: [],
     nextSteps: [],
@@ -1505,6 +1604,11 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
 
     // Configure MCP server for Claude Desktop and Claude Code
     configureMcpServer(isTTY, result)
+
+    // Configure permission safety level
+    if (interactive) {
+      await configurePermissionPreference(result)
+    }
 
     if (isTTY) console.log()
     op.completeStep('finalize')

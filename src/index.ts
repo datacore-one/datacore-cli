@@ -173,6 +173,15 @@ async function handleMeta(
           console.log(`  ${result.mcpConfig.claudeCode ? '✓' : '✗'} Claude Code .mcp.json`)
           console.log()
         }
+        if (result.codePermissions) {
+          console.log('Claude Code Permissions:')
+          console.log(`  ${result.codePermissions.enableAll ? '✓' : '✗'} enableAllProjectMcpServers`)
+          console.log(`  ${result.codePermissions.mcpAllowed ? '✓' : '✗'} mcp__datacore allowed`)
+          if (!result.codePermissions.enableAll || !result.codePermissions.mcpAllowed) {
+            console.log('      Fix: datacore update')
+          }
+          console.log()
+        }
 
         if (result.status === 'ready') {
           success('System ready for Datacore')

@@ -56,6 +56,7 @@ export interface DoctorResult {
   dependencies: DependencyCheck[]
   status: 'ready' | 'missing_required' | 'missing_recommended'
   mcpConfig?: { claudeDesktop: boolean; claudeCode: boolean }
+  codePermissions?: { enableAll: boolean; mcpAllowed: boolean }
 }
 
 export interface SpaceInfo {

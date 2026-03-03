@@ -312,10 +312,64 @@ function configureMcpForCode(isTTY: boolean, result: UpdateResult): boolean {
       if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code ${c.dim}(already configured)${c.reset}`)
       result.alreadyCurrent.push('MCP: Claude Code')
     }
+
+    // Configure permissions so users don't need bypass mode
+    configureCodePermissions(isTTY, result)
+
     return true
   } catch {
     result.warnings.push('Could not configure MCP for Claude Code')
     return false
+  }
+}
+
+/**
+ * Configure Claude Code permissions in .claude/settings.local.json.
+ * Enables MCP servers and adds mcp__datacore to the allow list so
+ * users don't need to run in bypass mode or approve every tool call.
+ */
+function configureCodePermissions(isTTY: boolean, result: UpdateResult): void {
+  const claudeDir = join(DATA_DIR, '.claude')
+  const settingsPath = join(claudeDir, 'settings.local.json')
+
+  try {
+    if (!existsSync(claudeDir)) {
+      mkdirSync(claudeDir, { recursive: true })
+    }
+
+    let config: Record<string, unknown> = {}
+    if (existsSync(settingsPath)) {
+      config = JSON.parse(readFileSync(settingsPath, 'utf-8'))
+    }
+
+    let changed = false
+
+    // Ensure enableAllProjectMcpServers is set
+    if (!config.enableAllProjectMcpServers) {
+      config.enableAllProjectMcpServers = true
+      changed = true
+    }
+
+    // Ensure mcp__datacore is in the allow list
+    const permissions = (config.permissions || {}) as Record<string, unknown>
+    const allow = (permissions.allow || []) as string[]
+    if (!allow.includes('mcp__datacore')) {
+      allow.push('mcp__datacore')
+      permissions.allow = allow
+      config.permissions = permissions
+      changed = true
+    }
+
+    if (changed) {
+      writeFileSync(settingsPath, JSON.stringify(config, null, 2) + '\n')
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code permissions configured`)
+      result.updated.push('Claude Code permissions configured')
+    } else {
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code permissions ${c.dim}(already configured)${c.reset}`)
+      result.alreadyCurrent.push('Claude Code permissions')
+    }
+  } catch {
+    result.warnings.push('Could not configure Claude Code permissions')
   }
 }
 

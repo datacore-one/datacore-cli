@@ -206,6 +206,34 @@ function checkMcp(platform: Platform): DependencyCheck {
   }
 }
 
+export function checkCodePermissions(): { enableAll: boolean; mcpAllowed: boolean } {
+  const home = process.env.HOME || ''
+  const settingsPaths = [
+    join(home, 'Data', '.claude', 'settings.local.json'),
+    join(home, 'Data', '.claude', 'settings.json'),
+  ]
+
+  let enableAll = false
+  let mcpAllowed = false
+
+  for (const p of settingsPaths) {
+    try {
+      if (existsSync(p)) {
+        const content = JSON.parse(readFileSync(p, 'utf-8'))
+        if (content?.enableAllProjectMcpServers) enableAll = true
+        const allow = content?.permissions?.allow as string[] | undefined
+        if (allow?.some((r: string) => r === 'mcp__datacore' || r.startsWith('mcp__datacore__'))) {
+          mcpAllowed = true
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  return { enableAll, mcpAllowed }
+}
+
 export function checkMcpConfig(): { claudeDesktop: boolean; claudeCode: boolean } {
   // Check Claude Desktop config
   const home = process.env.HOME || ''
@@ -299,5 +327,6 @@ export function runDoctor(): DoctorResult {
     dependencies,
     status,
     mcpConfig: checkMcpConfig(),
+    codePermissions: checkCodePermissions(),
   }
 }

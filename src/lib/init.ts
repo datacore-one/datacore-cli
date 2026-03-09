@@ -56,7 +56,7 @@ const KNOWN_SPACES: KnownSpace[] = [
   {
     name: 'datafund',
     displayName: 'Datafund',
-    description: 'Datafund organization - strategy, operations, investor relations',
+    description: 'Datafund organization workspace',
     repo: 'https://github.com/datacore-one/datafund-space.git',
     org: 'datacore-one',
     private: true,

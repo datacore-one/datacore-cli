@@ -201,7 +201,7 @@ $ datacore init
 
   Space name (e.g., "datafund", "acme-corp"): >>> datafund
   ✓ Found registered space: Datafund
-    Datafund organization - strategy, operations, investor relations
+    Datafund organization workspace
   ⠋ Cloning Datafund...
   ✓ Added space: 1-datafund
 
@@ -221,7 +221,7 @@ $ datacore init
 ```
   Space name (e.g., "datafund", "acme-corp"): >>> datafund
   ✓ Found registered space: Datafund
-    Datafund organization - strategy, operations, investor relations
+    Datafund organization workspace
   ⠋ Cloning Datafund...
   ✗ Could not clone Datafund
     This is a private repo. Make sure you have access to datacore-one.

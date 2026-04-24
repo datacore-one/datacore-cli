@@ -1,14 +1,13 @@
 /**
  * Space management utilities.
  *
- * Spaces are numbered directories in ~/Data following the pattern [N]-[name]/
+ * Spaces are numbered directories in the Datacore root following the pattern [N]-[name]/
  */
 
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'fs'
 import { join, basename } from 'path'
 import type { SpaceInfo } from '../types'
-
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
+import { DATA_DIR, DISPLAY_DATA_DIR } from '../paths'
 
 /**
  * List all spaces in the Datacore installation.
@@ -389,7 +388,7 @@ Tag tasks with \`:AI:\` to delegate to agents:
 
 ## See Also
 
-Parent: ~/Data/CLAUDE.md
+Parent: ${DISPLAY_DATA_DIR}/CLAUDE.md
 `
     )
   } else {

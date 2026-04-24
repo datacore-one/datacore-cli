@@ -16,11 +16,9 @@ import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { updateModules, listModules } from './module'
 import { createSnapshot, saveSnapshot } from './snapshot'
 import { pullAll } from './sync'
+import { DATA_DIR, DATACORE_DIR, DISPLAY_DATA_DIR } from '../paths'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const DATA_DIR = join(process.env.HOME || '', 'Data')
-const DATACORE_DIR = join(DATA_DIR, '.datacore')
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -427,7 +425,7 @@ async function upgradeMcpConfig(
       'Claude Desktop',
       'Both',
     ], 0)
-    target = (['code', 'desktop', 'both'] as const)[choice]
+    target = (['code', 'desktop', 'both'] as const)[choice] ?? 'code'
   } else if (!desktopDir) {
     target = 'code'
   }

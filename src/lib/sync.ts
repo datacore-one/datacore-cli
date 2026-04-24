@@ -8,8 +8,7 @@ import { execSync, spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { join, basename } from 'path'
 import { listSpaces } from './space'
-
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
+import { DATA_DIR } from '../paths'
 
 export interface SyncResult {
   path: string

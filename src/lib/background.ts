@@ -6,9 +6,9 @@
 import { spawn } from 'child_process'
 import { openSync, closeSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { DATA_DIR, DATACORE_DIR } from '../paths'
 
-const DATA_DIR = join(process.env.HOME || '', 'Data')
-const STATE_DIR = join(DATA_DIR, '.datacore', 'state')
+const STATE_DIR = join(DATACORE_DIR, 'state')
 
 export interface BackgroundJob {
   pid: number

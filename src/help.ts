@@ -3,11 +3,12 @@
  */
 
 import { RESOURCES, ACTIONS, type Resource } from './routing'
+import { DISPLAY_DATA_DIR } from './paths'
 
 export function showHelp(): void {
   console.log(`datacore - AI Second Brain Setup & Management CLI
 
-Setup and admin tool for Datacore. For daily use, run: cd ~/Data && claude
+Setup and admin tool for Datacore. For daily use, run: cd ${DISPLAY_DATA_DIR} && claude
 
 Usage:
   datacore <command> [args] [options]
@@ -53,7 +54,7 @@ Examples:
   datacore module install nightshift
 
   # Then use Claude Code for daily workflow
-  cd ~/Data && claude`)
+  cd ${DISPLAY_DATA_DIR} && claude`)
 }
 
 export function showResourceHelp(resource: string): void {
@@ -149,7 +150,7 @@ Usage:
 
 Description:
   Interactive wizard that sets up your Datacore second brain:
-  1. Creates ~/Data directory structure
+  1. Creates the Datacore root directory structure
   2. Installs dependencies (including MCP server)
   3. Initializes git repositories
   4. Generates CLAUDE.md context files
@@ -158,7 +159,7 @@ Description:
   7. Configures MCP server for persistent AI memory
 
 Options:
-  --path <dir>         Installation directory (default: ~/Data)
+  --path <dir>         Installation directory (default: ${DISPLAY_DATA_DIR})
   --yes, -y            Use defaults, skip prompts
   --no-claude          Skip Claude Code check
 
@@ -199,7 +200,7 @@ Checks:
     - Claude Code .mcp.json
 
   Datacore:
-    - ~/Data exists
+    - Datacore root exists
     - .datacore/ configured
     - Spaces detected
 
@@ -560,7 +561,7 @@ Description:
   Output: datacore.lock.yaml (like pip's requirements.txt)
 
 Arguments:
-  [path]             Output path (default: ~/Data/datacore.lock.yaml)
+  [path]             Output path (default: ${DISPLAY_DATA_DIR}/datacore.lock.yaml)
 
 Options:
   --settings         Include base settings in snapshot
@@ -582,7 +583,7 @@ Description:
   - Creates missing spaces (if git sources available)
 
 Arguments:
-  [path]             Snapshot file (default: ~/Data/datacore.lock.yaml)
+  [path]             Snapshot file (default: ${DISPLAY_DATA_DIR}/datacore.lock.yaml)
 
 Options:
   --dry-run          Show what would be restored
@@ -606,7 +607,7 @@ Description:
   - Changed dependency versions
 
 Arguments:
-  [path]             Snapshot file (default: ~/Data/datacore.lock.yaml)
+  [path]             Snapshot file (default: ${DISPLAY_DATA_DIR}/datacore.lock.yaml)
 
 Options:
   --format json      Output as JSON
@@ -624,7 +625,7 @@ Description:
   Displays the contents of a snapshot file.
 
 Arguments:
-  [path]             Snapshot file (default: ~/Data/datacore.lock.yaml)
+  [path]             Snapshot file (default: ${DISPLAY_DATA_DIR}/datacore.lock.yaml)
 
 Options:
   --format json      Output as JSON

@@ -13,8 +13,8 @@ import { listSpaces } from './space'
 import { listModules } from './module'
 import { checkDependencies, checkDatacore } from './dependency'
 import { loadConfig } from '../config'
+import { DATA_DIR } from '../paths'
 
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
 const LOCK_FILE = join(DATA_DIR, 'datacore.lock.yaml')
 const CLI_VERSION = '1.0.6'
 

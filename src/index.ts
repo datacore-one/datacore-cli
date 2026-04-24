@@ -17,6 +17,7 @@ import { initDatacore, isInitialized } from './lib/init'
 import { updateDatacore } from './lib/upgrade'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
+import { DATA_DIR, DISPLAY_DATA_DIR } from './paths'
 
 const VERSION = '1.1.0'
 
@@ -39,7 +40,7 @@ async function handleMeta(
         if (format === 'json') {
           output({ success: true, message: 'Datacore already initialized', hint: 'Use datacore update or --force to re-initialize' }, format)
         } else {
-          info('Datacore already initialized at ~/Data')
+          info(`Datacore already initialized at ${DISPLAY_DATA_DIR}`)
           info('Run datacore update to pull latest and apply changes')
           info('Use --force to re-run the full setup wizard')
         }
@@ -573,7 +574,7 @@ async function handleResource(
           // Add task to inbox.org with :AI: tag
           const { existsSync, appendFileSync } = await import('fs')
           const { join } = await import('path')
-          const inboxPath = join(process.env.HOME || '~', 'Data', '0-personal', 'org', 'inbox.org')
+          const inboxPath = join(DATA_DIR, '0-personal', 'org', 'inbox.org')
 
           if (!existsSync(inboxPath)) {
             throw new CLIError('ERR_NOT_FOUND', 'inbox.org not found. Run datacore init first.')
@@ -738,7 +739,7 @@ async function handleResource(
           if (!snapshot) {
             throw new CLIError('ERR_NOT_FOUND', inputPath
               ? `Snapshot file not found: ${inputPath}`
-              : 'No datacore.lock.yaml found in ~/Data'
+              : `No datacore.lock.yaml found in ${DISPLAY_DATA_DIR}`
             )
           }
 
@@ -871,7 +872,7 @@ async function handleResource(
           if (format === 'json') {
             output(snapshot, format)
           } else {
-            console.log(`Snapshot: ${inputPath || '~/Data/datacore.lock.yaml'}`)
+            console.log(`Snapshot: ${inputPath || `${DISPLAY_DATA_DIR}/datacore.lock.yaml`}`)
             console.log(`Created: ${snapshot.created}`)
             console.log(`CLI Version: ${snapshot.cliVersion}`)
             console.log(`Platform: ${snapshot.platform}`)

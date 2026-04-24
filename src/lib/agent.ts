@@ -9,8 +9,7 @@ import { spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import type { AgentInvocation, AgentResult } from '../types'
-
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
+import { DATA_DIR, DISPLAY_DATA_DIR } from '../paths'
 
 function commandExists(cmd: string): boolean {
   try {
@@ -25,7 +24,7 @@ function commandExists(cmd: string): boolean {
 export interface InvokeOptions {
   /** Stream output to console as it arrives */
   stream?: boolean
-  /** Working directory (defaults to ~/Data) */
+  /** Working directory (defaults to the Datacore root) */
   cwd?: string
   /** Timeout in milliseconds */
   timeout?: number

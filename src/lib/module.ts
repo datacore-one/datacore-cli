@@ -8,9 +8,9 @@ import { existsSync, readdirSync, readFileSync, rmSync } from 'fs'
 import { join, basename } from 'path'
 import { execFileSync } from 'child_process'
 import type { ModuleInfo } from '../types'
+import { DATACORE_DIR } from '../paths'
 
-const DATA_DIR = join(process.env.HOME || '', 'Data')
-const MODULES_DIR = join(DATA_DIR, '.datacore', 'modules')
+const MODULES_DIR = join(DATACORE_DIR, 'modules')
 
 /**
  * Available modules catalog.

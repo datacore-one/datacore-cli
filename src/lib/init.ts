@@ -29,11 +29,10 @@ import { createSnapshot, saveSnapshot } from './snapshot'
 import { startOperation } from '../state'
 import { BANNER, INIT_COMPLETE, Spinner, sleep, section } from './animation'
 import { spawnBackground, type BackgroundJob } from './background'
+import { DATA_DIR, DATACORE_DIR, DISPLAY_DATA_DIR } from '../paths'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DATA_DIR = join(process.env.HOME || '', 'Data')
-const DATACORE_DIR = join(DATA_DIR, '.datacore')
 const UPSTREAM_REPO = 'datacore-one/datacore'
 const TOTAL_STEPS = 9
 
@@ -850,7 +849,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     if (isTTY) {
       section(`Step 3/${TOTAL_STEPS}: Setting Up Repository`)
       console.log()
-      console.log(`  ${c.dim}Datacore lives in ~/Data. We'll fork the main repository to your${c.reset}`)
+      console.log(`  ${c.dim}Datacore lives in ${DISPLAY_DATA_DIR}. We'll fork the main repository to your${c.reset}`)
       console.log(`  ${c.dim}GitHub account so you can customize freely and pull updates.${c.reset}`)
       console.log()
     }
@@ -906,14 +905,14 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       console.log()
     }
 
-    // ── Phase 2: Ensure ~/Data is a git repository ────────────────────
+    // ── Phase 2: Ensure the Datacore root is a git repository ─────────
     const hasGitDir = existsSync(join(DATA_DIR, '.git'))
     // A .git dir might exist but be broken (no commits, from a failed init)
     const hasValidGit = hasGitDir && runArgs('git', ['rev-parse', 'HEAD'], { cwd: DATA_DIR, timeout: 5000 })
 
     if (hasValidGit) {
       // ── Case A: Working git repo → pull and verify remotes ──────────
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} Found existing repository at ~/Data`)
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Found existing repository at ${DISPLAY_DATA_DIR}`)
 
       const pullSpinner = isTTY ? new Spinner('Pulling latest changes...') : null
       pullSpinner?.start()
@@ -934,7 +933,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       mkdirSync(DATA_DIR, { recursive: true })
 
       // Try clone first (works for empty or non-existent dirs)
-      const cloneSpinner = isTTY ? new Spinner('Cloning into ~/Data...') : null
+      const cloneSpinner = isTTY ? new Spinner(`Cloning into ${DISPLAY_DATA_DIR}...`) : null
       cloneSpinner?.start()
 
       let lastCloneErr = ''
@@ -951,7 +950,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       }
 
       if (cloned) {
-        cloneSpinner?.succeed('Cloned into ~/Data')
+        cloneSpinner?.succeed(`Cloned into ${DISPLAY_DATA_DIR}`)
         result.created.push(DATA_DIR)
         if (ghUser) {
           runArgs('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: DATA_DIR })
@@ -959,21 +958,21 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       } else if (lastCloneErr.includes('already exists and is not an empty directory')) {
         // ── Case C: Directory not empty → need git init approach ──────
         if (!force) {
-          cloneSpinner?.fail('~/Data is not empty')
+          cloneSpinner?.fail(`${DISPLAY_DATA_DIR} is not empty`)
           const entries = readdirSync(DATA_DIR)
           if (isTTY) {
-            console.log(`    ${c.dim}~/Data contains ${entries.length} items but is not a git repository.${c.reset}`)
+            console.log(`    ${c.dim}${DISPLAY_DATA_DIR} contains ${entries.length} items but is not a git repository.${c.reset}`)
             console.log(`    ${c.dim}Use --force to initialize git in the existing directory.${c.reset}`)
-            console.log(`    ${c.dim}Or remove/rename ~/Data for a fresh install.${c.reset}`)
+            console.log(`    ${c.dim}Or remove/rename ${DISPLAY_DATA_DIR} for a fresh install.${c.reset}`)
           }
-          result.errors.push('~/Data exists and is not empty. Use --force to re-initialize.')
+          result.errors.push(`${DISPLAY_DATA_DIR} exists and is not empty. Use --force to re-initialize.`)
           op.failStep('clone_repo', 'Directory not empty')
-          op.fail('~/Data is not empty')
+          op.fail(`${DISPLAY_DATA_DIR} is not empty`)
           return result
         }
 
         // --force: initialize git in the existing directory
-        cloneSpinner?.update('Initializing git in existing ~/Data...')
+        cloneSpinner?.update(`Initializing git in existing ${DISPLAY_DATA_DIR}...`)
 
         let initOk = false
         let lastInitErr = ''
@@ -987,7 +986,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         }
 
         if (initOk) {
-          cloneSpinner?.succeed('Git initialized in existing ~/Data')
+          cloneSpinner?.succeed(`Git initialized in existing ${DISPLAY_DATA_DIR}`)
           if (ghUser) {
             runArgs('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: DATA_DIR })
           }
@@ -1924,7 +1923,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       if (envFiles.length === 0) {
         console.log(`  ${c.bold}API Keys:${c.reset}`)
         console.log(`  ${c.dim}Some modules need API keys to function. Configure them in Claude Code:${c.reset}`)
-        console.log(`    ${c.dim}cd ~/Data && claude${c.reset}`)
+        console.log(`    ${c.dim}cd ${DISPLAY_DATA_DIR} && claude${c.reset}`)
         console.log(`    ${c.dim}"Help me set up my API keys"${c.reset}`)
         console.log(`  ${c.dim}Keys are stored in .datacore/env/ - gitignored, never leave your machine.${c.reset}`)
         console.log()
@@ -1942,7 +1941,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       // Get Started
       console.log(`  ${c.bold}Get Started:${c.reset}`)
       console.log()
-      console.log(`  ${c.cyan}1.${c.reset} cd ~/Data && claude`)
+      console.log(`  ${c.cyan}1.${c.reset} cd ${DISPLAY_DATA_DIR} && claude`)
       console.log(`     ${c.dim}Start Claude Code in your Datacore directory${c.reset}`)
       console.log()
       console.log(`  ${c.cyan}2.${c.reset} Type ${c.cyan}/today${c.reset}`)
@@ -1976,7 +1975,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         console.log()
       }
 
-      console.log(`  ${c.dim}Edit ~/Data/CLAUDE.local.md to teach Claude about you.${c.reset}`)
+      console.log(`  ${c.dim}Edit ${DISPLAY_DATA_DIR}/CLAUDE.local.md to teach Claude about you.${c.reset}`)
       console.log(`  ${c.dim}Run 'datacore doctor' anytime to check system health.${c.reset}`)
       console.log()
     }

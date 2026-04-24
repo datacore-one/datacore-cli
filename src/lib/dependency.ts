@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { DependencyCheck, DoctorResult } from '../types'
 import { detectPlatform, getInstallCommand, getPlatformInfo, type Platform } from './platform'
+import { DATA_DIR } from '../paths'
 
 function commandExists(cmd: string): boolean {
   try {
@@ -207,10 +208,9 @@ function checkMcp(platform: Platform): DependencyCheck {
 }
 
 export function checkCodePermissions(): { enableAll: boolean; mcpAllowed: boolean } {
-  const home = process.env.HOME || ''
   const settingsPaths = [
-    join(home, 'Data', '.claude', 'settings.local.json'),
-    join(home, 'Data', '.claude', 'settings.json'),
+    join(DATA_DIR, '.claude', 'settings.local.json'),
+    join(DATA_DIR, '.claude', 'settings.json'),
   ]
 
   let enableAll = false
@@ -259,7 +259,7 @@ export function checkMcpConfig(): { claudeDesktop: boolean; claudeCode: boolean 
 
   // Check Claude Code .mcp.json
   let claudeCode = false
-  const mcpJsonPath = join(home, 'Data', '.mcp.json')
+  const mcpJsonPath = join(DATA_DIR, '.mcp.json')
   try {
     if (existsSync(mcpJsonPath)) {
       const content = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
@@ -289,7 +289,7 @@ export function checkDependencies(): DependencyCheck[] {
 }
 
 export function checkDatacore(): { exists: boolean; configured: boolean; spaces: number } {
-  const dataDir = join(process.env.HOME || '~', 'Data')
+  const dataDir = DATA_DIR
   const exists = existsSync(dataDir)
   const configured = exists && existsSync(join(dataDir, '.datacore'))
 

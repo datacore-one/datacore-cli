@@ -17,8 +17,9 @@ import { initDatacore, isInitialized } from './lib/init'
 import { updateDatacore } from './lib/upgrade'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
+import * as app from './lib/app'
 
-const VERSION = '1.1.0'
+const VERSION = '1.3.0'
 
 const args = process.argv.slice(2)
 const parsed = parseArgs(args)
@@ -899,6 +900,147 @@ async function handleResource(
         }
         default:
           throw new CLIError('ERR_INVALID_ARGUMENT', `Unknown action: snapshot ${action}`)
+      }
+      break
+    }
+
+    case 'app': {
+      switch (action) {
+        case 'start': {
+          const r = app.start()
+          if (format === 'json') {
+            output(r, format)
+          } else if (r.ok) {
+            success(r.message)
+          } else {
+            warn(r.message)
+          }
+          break
+        }
+        case 'stop': {
+          const r = await app.stop()
+          if (format === 'json') {
+            output(r, format)
+          } else if (r.stopped) {
+            success(r.message)
+          } else {
+            warn(r.message)
+          }
+          break
+        }
+        case 'rebuild': {
+          const repo = app.findAppRepo()
+          if (!repo) {
+            throw new CLIError(
+              'ERR_NOT_FOUND',
+              'datacore-app repo not found in any expected location.',
+              'Set DATACORE_APP_REPO to point at the repo, or clone it first.',
+            )
+          }
+          info(`Rebuilding from ${repo} ...`)
+          const r = app.rebuild(repo)
+          if (format === 'json') {
+            output(r, format)
+          } else if (r.ok) {
+            success(r.message)
+          } else {
+            errorLog(r.message)
+            process.exit(1)
+          }
+          break
+        }
+        case 'status': {
+          const s = await app.status()
+          if (format === 'json') {
+            output(s, format)
+          } else {
+            console.log(`App: ${s.running ? '✓ running' : '✗ stopped'}`)
+            if (s.port) console.log(`Port: ${s.port}`)
+            if (s.pid) console.log(`PID:  ${s.pid}`)
+            console.log(`Health: ${s.health}`)
+          }
+          break
+        }
+        case 'logs': {
+          const logPath = app.logsPath()
+          info(`Tail ${logPath} (Ctrl-C to exit)`)
+          const { spawn } = await import('node:child_process')
+          spawn('tail', ['-f', logPath], { stdio: 'inherit' })
+          break
+        }
+        case 'undo': {
+          try {
+            const r = await app.undoLast()
+            if (format === 'json') {
+              output(r.body, format)
+            } else if (r.status === 200) {
+              const body = r.body as { undone_sha?: string }
+              success(`Reverted checkpoint ${body.undone_sha?.slice(0, 8)}`)
+            } else {
+              const body = r.body as { message?: string }
+              warn(body?.message ?? `Undo failed (HTTP ${r.status})`)
+            }
+          } catch (err) {
+            if (err instanceof app.AppError) {
+              throw new CLIError(err.code as 'ERR_DAEMON_NOT_RUNNING' | 'ERR_DAEMON_STATE_INVALID' | 'ERR_INVALID_ARGUMENT', err.message, err.hint ?? null)
+            }
+            throw err
+          }
+          break
+        }
+        case 'checkpoints': {
+          const limit = Number(flags.limit ?? 20)
+          try {
+            const r = await app.listCheckpoints(limit)
+            if (format === 'json') {
+              output(r.body, format)
+            } else {
+              const body = r.body as { checkpoints?: Array<{ sha: string; at: string; subject: string }> }
+              const cps = body?.checkpoints ?? []
+              if (cps.length === 0) {
+                info('No checkpoints yet — they accumulate as the app mutates org files.')
+              } else {
+                for (const c of cps) {
+                  console.log(`  ${c.sha.slice(0, 8)}  ${c.at}  ${c.subject}`)
+                }
+              }
+            }
+          } catch (err) {
+            if (err instanceof app.AppError) {
+              throw new CLIError(err.code as 'ERR_DAEMON_NOT_RUNNING' | 'ERR_DAEMON_STATE_INVALID' | 'ERR_INVALID_ARGUMENT', err.message, err.hint ?? null)
+            }
+            throw err
+          }
+          break
+        }
+        case 'undo-to': {
+          const sha = cmdArgs[0]
+          if (!sha) {
+            throw new CLIError(
+              'ERR_INVALID_ARGUMENT',
+              'Missing sha. Usage: datacore app undo-to <sha>',
+            )
+          }
+          try {
+            const r = await app.undoTo(sha)
+            if (format === 'json') {
+              output(r.body, format)
+            } else if (r.status === 200) {
+              success(`Reverted ${sha.slice(0, 8)}`)
+            } else {
+              const body = r.body as { message?: string }
+              warn(body?.message ?? `Undo-to failed (HTTP ${r.status})`)
+            }
+          } catch (err) {
+            if (err instanceof app.AppError) {
+              throw new CLIError(err.code as 'ERR_DAEMON_NOT_RUNNING' | 'ERR_DAEMON_STATE_INVALID' | 'ERR_INVALID_ARGUMENT', err.message, err.hint ?? null)
+            }
+            throw err
+          }
+          break
+        }
+        default:
+          throw new CLIError('ERR_INVALID_ARGUMENT', `Unknown action: app ${action}`)
       }
       break
     }

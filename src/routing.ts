@@ -11,7 +11,7 @@ export type ParsedCommand =
   | { type: 'unknown'; command: string }
 
 // Resources with subcommands: datacore <resource> <action>
-export const RESOURCES = ['space', 'module', 'config', 'nightshift', 'cron', 'snapshot'] as const
+export const RESOURCES = ['space', 'module', 'config', 'nightshift', 'cron', 'snapshot', 'app'] as const
 export type Resource = typeof RESOURCES[number]
 
 // Meta commands (single word): datacore <command>
@@ -35,6 +35,7 @@ export const ACTIONS: Record<Resource, readonly string[]> = {
   nightshift: ['status', 'trigger', 'queue'],
   cron: ['install', 'status', 'remove'],
   snapshot: ['create', 'restore', 'diff', 'show'],
+  app: ['start', 'stop', 'rebuild', 'status', 'logs', 'undo', 'checkpoints', 'undo-to'],
 } as const
 
 export function parseArgs(argv: string[]): ParsedCommand {

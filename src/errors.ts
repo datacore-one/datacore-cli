@@ -18,6 +18,8 @@ export type ErrorCode =
   | 'ERR_NOT_INITIALIZED'
   | 'ERR_INVALID_SPACE'
   | 'ERR_MODULE_ERROR'
+  | 'ERR_DAEMON_NOT_RUNNING'
+  | 'ERR_DAEMON_STATE_INVALID'
 
 const EXIT_CODES: Record<ErrorCode, number> = {
   ERR_MISSING_DEPENDENCY: 2,
@@ -35,6 +37,8 @@ const EXIT_CODES: Record<ErrorCode, number> = {
   ERR_NOT_INITIALIZED: 1,
   ERR_INVALID_SPACE: 1,
   ERR_MODULE_ERROR: 3,
+  ERR_DAEMON_NOT_RUNNING: 4,
+  ERR_DAEMON_STATE_INVALID: 4,
 }
 
 const RECOVERABLE: Set<ErrorCode> = new Set([

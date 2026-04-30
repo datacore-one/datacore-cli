@@ -31,6 +31,9 @@ Automation (for cron jobs):
   nightshift           Queue and trigger AI tasks
   cron                 Set up scheduled tasks
 
+Desktop app:
+  app                  Control the desktop app (start / stop / undo / ...)
+
 Meta:
   version              Show version
   help [topic]         Show help for a topic
@@ -86,7 +89,7 @@ export function showResourceHelp(resource: string): void {
   if (!RESOURCES.includes(resource as Resource)) {
     console.log(`Unknown command: ${resource}
 
-Available commands: init, update, doctor, ingest, sync, today, tomorrow, space, module, config, nightshift, cron, snapshot
+Available commands: init, update, doctor, ingest, sync, today, tomorrow, space, module, config, nightshift, cron, snapshot, app
 
 Run 'datacore help' for overview.`)
     return
@@ -341,6 +344,7 @@ function getResourceDescription(resource: Resource): string {
     nightshift: 'Queue and trigger AI tasks',
     cron: 'Manage scheduled tasks',
     snapshot: 'Create and restore installation snapshots',
+    app: 'Control the Datacore desktop app',
   }
   return descriptions[resource]
 }
@@ -372,6 +376,15 @@ function getActionDescription(resource: Resource, action: string): string {
     'snapshot restore': 'Restore from snapshot',
     'snapshot diff': 'Compare with snapshot',
     'snapshot show': 'Show snapshot contents',
+    // app
+    'app start': 'Launch the Datacore desktop app',
+    'app stop': 'Gracefully stop the running daemon',
+    'app rebuild': 'Rebuild the app binary and reinstall to /Applications',
+    'app status': 'Show daemon health, port, pid',
+    'app logs': 'Tail the daemon log',
+    'app undo': 'Revert the last app-checkpoint commit',
+    'app checkpoints': 'List recent app-checkpoint commits',
+    'app undo-to': 'Revert a specific checkpoint by sha',
   }
   return descriptions[`${resource} ${action}`] ?? action
 }

@@ -87,6 +87,41 @@ export function findAppRepo(): string | null {
   return null
 }
 
+const APP_PATH_CANDIDATES_DARWIN = [
+  '/Applications/Datacore.app',
+  join(homedir(), 'Applications', 'Datacore.app'),
+]
+const APP_PATH_CANDIDATES_LINUX = [
+  '/usr/local/bin/datacore-app',
+  '/opt/Datacore/datacore-app',
+]
+
+/** True iff the Datacore desktop app is installed OR the daemon is running
+ * OR the source repo is present. Used to gate the `app` subcommands so
+ * fresh CLI users (without the app yet) get a clear "Coming soon" message
+ * instead of confusing errors about missing binaries. */
+export function isAppAvailable(): boolean {
+  if (process.env.DATACORE_APP_ENABLED === '1') return true
+  if (existsSync(PORT_FILE)) return true  // daemon running ⇒ app definitely present
+  if (findAppRepo() !== null) return true  // dev with source ⇒ unblock rebuild
+  const p = platform()
+  if (p === 'darwin') {
+    return APP_PATH_CANDIDATES_DARWIN.some(existsSync)
+  }
+  if (p === 'linux') {
+    return APP_PATH_CANDIDATES_LINUX.some(existsSync)
+  }
+  return false
+}
+
+export const COMING_SOON_MESSAGE = `The Datacore desktop app is coming soon.
+
+For now, run ~/Data via the CLI + Claude Code:
+  cd ~/Data && claude
+
+The app will ship publicly once it leaves private beta. To track:
+  https://datacore.one`
+
 export interface AppStatus {
   running: boolean
   port: number | null

@@ -19,7 +19,7 @@ import { listModules, installModule, updateModules, removeModule } from './lib/m
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
 import * as app from './lib/app'
 
-const VERSION = '1.3.0'
+const VERSION = '1.3.1'
 
 const args = process.argv.slice(2)
 const parsed = parseArgs(args)
@@ -905,6 +905,21 @@ async function handleResource(
     }
 
     case 'app': {
+      // Gate every `app` subcommand on whether the desktop app is actually
+      // present on this machine. Fresh CLI users (no app installed yet)
+      // see "Coming soon" instead of confusing missing-binary errors.
+      // Bypass with DATACORE_APP_ENABLED=1.
+      if (!app.isAppAvailable()) {
+        if (format === 'json') {
+          output({
+            available: false,
+            message: app.COMING_SOON_MESSAGE,
+          }, format)
+        } else {
+          info(app.COMING_SOON_MESSAGE)
+        }
+        break
+      }
       switch (action) {
         case 'start': {
           const r = app.start()

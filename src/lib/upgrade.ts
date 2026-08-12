@@ -427,7 +427,11 @@ async function upgradeMcpConfig(
       'Claude Desktop',
       'Both',
     ], 0)
-    target = (['code', 'desktop', 'both'] as const)[choice]
+    // Index defensively: choose() returns a number, and an out-of-range answer
+    // would make this undefined — which then silently skips BOTH configuration
+    // branches below, leaving the user with no MCP configured and no error.
+    // Falling back to the recommended option keeps the update path total.
+    target = (['code', 'desktop', 'both'] as const)[choice] ?? 'code'
   } else if (!desktopDir) {
     target = 'code'
   }

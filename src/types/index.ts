@@ -48,15 +48,32 @@ export interface DependencyCheck {
   installCommand?: string
 }
 
+/**
+ * One ledger finding. `ok: false` is a real problem; `ok: null` means the check
+ * could not run — a missing interpreter, an unreachable space. The two must
+ * stay distinguishable, because a probe that renders "could not tell" as
+ * "fine" is how a fleet reports itself healthy while a machine sits six weeks
+ * behind, and rendering it as "broken" manufactures failures out of an
+ * installation that simply predates the ledger.
+ */
+export interface LedgerCheck {
+  name: string
+  ok: boolean | null
+  detail: string
+}
+
 export interface DoctorResult {
   platform: string
   arch: string
   home: string
+  dataDir: string
+  python?: { path: string | null; version?: string }
   datacoreExists: boolean
   dependencies: DependencyCheck[]
-  status: 'ready' | 'missing_required' | 'missing_recommended'
+  status: 'ready' | 'missing_required' | 'missing_recommended' | 'ledger_degraded'
   mcpConfig?: { claudeDesktop: boolean; claudeCode: boolean }
   codePermissions?: { enableAll: boolean; mcpAllowed: boolean }
+  ledger?: LedgerCheck[]
 }
 
 export interface SpaceInfo {

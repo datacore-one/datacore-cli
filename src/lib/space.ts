@@ -7,18 +7,19 @@
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'fs'
 import { join, basename } from 'path'
 import type { SpaceInfo } from '../types'
+import { dataDir } from './paths'
 
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
+const DATA_DIR = () => dataDir()
 
 /**
  * List all spaces in the Datacore installation.
  */
 export function listSpaces(): SpaceInfo[] {
-  if (!existsSync(DATA_DIR)) {
+  if (!existsSync(DATA_DIR())) {
     return []
   }
 
-  const entries = readdirSync(DATA_DIR, { withFileTypes: true })
+  const entries = readdirSync(DATA_DIR(), { withFileTypes: true })
   const spaces: SpaceInfo[] = []
 
   for (const entry of entries) {
@@ -30,7 +31,7 @@ export function listSpaces(): SpaceInfo[] {
 
     const [, numStr, name] = match
     const number = parseInt(numStr!, 10)
-    const path = join(DATA_DIR, entry.name)
+    const path = join(DATA_DIR(), entry.name)
 
     spaces.push({
       name: entry.name,
@@ -88,7 +89,7 @@ export function createSpace(name: string, type: 'personal' | 'team' = 'team'): S
   // Normalize name (lowercase, hyphenated)
   const normalizedName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
   const folderName = `${number}-${normalizedName}`
-  const spacePath = join(DATA_DIR, folderName)
+  const spacePath = join(DATA_DIR(), folderName)
 
   if (existsSync(spacePath)) {
     throw new Error(`Space already exists: ${folderName}`)

@@ -7,9 +7,10 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { parse, stringify } from 'yaml'
 import type { ConfigValue } from './types'
+import { dataDir } from './lib/paths'
 
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
-const CONFIG_DIR = join(DATA_DIR, '.datacore')
+const DATA_DIR = () => dataDir()
+const CONFIG_DIR = join(DATA_DIR(), '.datacore')
 const BASE_CONFIG = join(CONFIG_DIR, 'settings.yaml')
 const LOCAL_CONFIG = join(CONFIG_DIR, 'settings.local.yaml')
 

@@ -2,11 +2,14 @@
  * Dependency checking utilities.
  */
 
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
-import type { DependencyCheck, DoctorResult } from '../types'
+import { join, basename } from 'path'
+import type { DependencyCheck, DoctorResult, LedgerCheck } from '../types'
 import { detectPlatform, getInstallCommand, getPlatformInfo, type Platform } from './platform'
+import { dataDir as resolveDataDir } from './paths'
+import { findPython, PYTHON_MIN_VERSION } from './python'
+import { listSpaces } from './space'
 
 function commandExists(cmd: string): boolean {
   try {
@@ -144,12 +147,15 @@ function checkPython(platform: Platform): DependencyCheck {
 
   if (installed) {
     version = getVersion(cmd, '--version')
-    // Check >= 3.9
+    // >= 3.10, NOT 3.9. Datacore's ledger modules use PEP-604 unions at
+    // import time, so 3.9 does not degrade — it raises TypeError before
+    // running anything. Reporting 3.9 as satisfying the requirement told
+    // macOS users their install was fine when the ledger could not load.
     const match = version?.match(/(\d+)\.(\d+)/)
     if (match) {
       const major = parseInt(match[1] ?? '0', 10)
       const minor = parseInt(match[2] ?? '0', 10)
-      meetsMin = major > 3 || (major === 3 && minor >= 9)
+      meetsMin = major > 3 || (major === 3 && minor >= 10)
     }
   }
 
@@ -289,7 +295,7 @@ export function checkDependencies(): DependencyCheck[] {
 }
 
 export function checkDatacore(): { exists: boolean; configured: boolean; spaces: number } {
-  const dataDir = join(process.env.HOME || '~', 'Data')
+  const dataDir = resolveDataDir()
   const exists = existsSync(dataDir)
   const configured = exists && existsSync(join(dataDir, '.datacore'))
 
@@ -307,6 +313,110 @@ export function checkDatacore(): { exists: boolean; configured: boolean; spaces:
   return { exists, configured, spaces }
 }
 
+/**
+ * Ask the ledger whether it is intact.
+ *
+ * doctor used to report "System ready for Datacore" from dependency versions
+ * and config file presence alone — every one of which can be perfect on an
+ * installation whose event chain is broken, whose actor identity resolves to
+ * the wrong machine, or whose Python cannot load the ledger at all. After an
+ * update, "did it work?" is the only question worth asking, and doctor could
+ * not answer it.
+ *
+ * Each check returns ok:null rather than false when it cannot run, so an
+ * installation that predates the ledger reports "not present" instead of
+ * "broken" — those need different actions from whoever reads this.
+ */
+function checkLedger(): LedgerCheck[] {
+  const checks: LedgerCheck[] = []
+  const root = resolveDataDir()
+
+  const python = findPython()
+  if (!python) {
+    checks.push({
+      name: 'python',
+      ok: false,
+      // Naming the floor matters: macOS ships 3.9 as `python3`, so "install
+      // Python" is the wrong instruction and sends people in a circle.
+      detail: `no interpreter >= ${PYTHON_MIN_VERSION} found (macOS system python3 is 3.9 and cannot load the ledger) — set DATACORE_PYTHON`,
+    })
+    return checks
+  }
+  checks.push({ name: 'python', ok: true, detail: python })
+
+  const ledgerCli = join(root, '.datacore', 'lib', 'ledger_cli.py')
+  if (!existsSync(ledgerCli)) {
+    checks.push({
+      name: 'ledger',
+      ok: null,
+      detail: 'not present in this installation (pre-ledger) — run: datacore update',
+    })
+    return checks
+  }
+
+  // Verify every writer's hash chain, per space. A space whose chain is broken
+  // cannot be folded into trustworthy state, so this is the load-bearing check.
+  let spaces: string[] = []
+  try {
+    spaces = listSpaces()
+      .map((s) => s.path)
+      .filter((p) => existsSync(join(p, '.datacore', 'events')))
+  } catch {
+    spaces = []
+  }
+
+  if (spaces.length === 0) {
+    checks.push({ name: 'chains', ok: null, detail: 'no space carries an event log yet' })
+    return checks
+  }
+
+  const broken: string[] = []
+  const unverifiable: string[] = []
+  for (const space of spaces) {
+    try {
+      execFileSync(python, [ledgerCli, 'verify', '--space', space], {
+        encoding: 'utf-8',
+        timeout: 60000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+    } catch (err: unknown) {
+      const e = err as { status?: number; message?: string }
+      // A non-zero exit is a real verdict (chain broken). A spawn failure is
+      // not — it means we never got an answer, which is a different finding.
+      if (typeof e.status === 'number') broken.push(basename(space))
+      else unverifiable.push(basename(space))
+    }
+  }
+
+  if (broken.length > 0) {
+    checks.push({
+      name: 'chains',
+      ok: false,
+      detail: `hash chain broken in ${broken.join(', ')} — do NOT publish; run: ledger_cli.py verify`,
+    })
+  } else if (unverifiable.length > 0 && unverifiable.length === spaces.length) {
+    checks.push({ name: 'chains', ok: null, detail: `could not verify ${unverifiable.join(', ')}` })
+  } else {
+    const n = spaces.length - unverifiable.length
+    checks.push({
+      name: 'chains',
+      ok: true,
+      detail: `${n} space(s) verified` + (unverifiable.length ? `, ${unverifiable.length} unverifiable` : ''),
+    })
+  }
+
+  // The transport is what makes `datacore update` safe. Its absence is why the
+  // CLI falls back to a merge pull, so say so rather than leaving it implied.
+  const transport = join(root, '.datacore', 'lib', 'ledger_transport.py')
+  checks.push(
+    existsSync(transport)
+      ? { name: 'transport', ok: true, detail: 'ledger_transport.py (merge, never rebase)' }
+      : { name: 'transport', ok: null, detail: 'absent — sync falls back to a plain merge pull' },
+  )
+
+  return checks
+}
+
 export function runDoctor(): DoctorResult {
   const { platform, arch, release } = getPlatformInfo()
   const dependencies = checkDependencies()
@@ -315,18 +425,28 @@ export function runDoctor(): DoctorResult {
   const missingRequired = dependencies.some(d => d.required && !d.installed)
   const missingRecommended = dependencies.some(d => !d.required && !d.installed)
 
+  const ledger = checkLedger()
+
   let status: DoctorResult['status'] = 'ready'
   if (missingRequired) status = 'missing_required'
   else if (missingRecommended) status = 'missing_recommended'
+  // A broken chain outranks a missing optional dependency: it is the one
+  // condition here that makes the installation's own history untrustworthy.
+  if (ledger.some((c) => c.ok === false)) status = 'ledger_degraded'
+
+  const py = findPython()
 
   return {
     platform: `${platform} (${release})`,
     arch,
     home: process.env.HOME || '~',
+    dataDir: resolveDataDir(),
+    python: { path: py },
     datacoreExists: datacore.exists,
     dependencies,
     status,
     mcpConfig: checkMcpConfig(),
     codePermissions: checkCodePermissions(),
+    ledger,
   }
 }

@@ -9,8 +9,9 @@ import { spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import type { AgentInvocation, AgentResult } from '../types'
+import { dataDir } from './paths'
 
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
+const DATA_DIR = () => dataDir()
 
 function commandExists(cmd: string): boolean {
   try {
@@ -41,7 +42,7 @@ export async function invokeAgent(
   invocation: AgentInvocation,
   options: InvokeOptions = {}
 ): Promise<AgentResult> {
-  const { stream = false, cwd = DATA_DIR, timeout = 300000 } = options
+  const { stream = false, cwd = DATA_DIR(), timeout = 300000 } = options
 
   // Verify claude command exists
   if (!commandExists('claude')) {
@@ -183,7 +184,7 @@ function parseArtifacts(output: string): Record<string, string> {
  * List available agents by scanning the registry.
  */
 export function listAgents(): string[] {
-  const registryPath = join(DATA_DIR, '.datacore', 'registry', 'agents.yaml')
+  const registryPath = join(DATA_DIR(), '.datacore', 'registry', 'agents.yaml')
   if (!existsSync(registryPath)) {
     return []
   }

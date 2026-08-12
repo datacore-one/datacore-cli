@@ -8,9 +8,10 @@ import { existsSync, readdirSync, readFileSync, rmSync } from 'fs'
 import { join, basename } from 'path'
 import { execFileSync } from 'child_process'
 import type { ModuleInfo } from '../types'
+import { dataDir } from './paths'
 
-const DATA_DIR = join(process.env.HOME || '', 'Data')
-const MODULES_DIR = join(DATA_DIR, '.datacore', 'modules')
+const DATA_DIR = () => dataDir()
+const MODULES_DIR = () => join(dataDir(), '.datacore', 'modules')
 
 /**
  * Available modules catalog.
@@ -128,18 +129,18 @@ export function getAvailableModules(): AvailableModule[] {
  * List installed modules.
  */
 export function listModules(): ModuleInfo[] {
-  if (!existsSync(MODULES_DIR)) {
+  if (!existsSync(MODULES_DIR())) {
     return []
   }
 
-  const entries = readdirSync(MODULES_DIR, { withFileTypes: true })
+  const entries = readdirSync(MODULES_DIR(), { withFileTypes: true })
   const modules: ModuleInfo[] = []
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     if (entry.name.startsWith('.')) continue
 
-    const modulePath = join(MODULES_DIR, entry.name)
+    const modulePath = join(MODULES_DIR(), entry.name)
     const info = getModuleInfo(modulePath)
     if (info) {
       modules.push(info)
@@ -213,9 +214,9 @@ export function getModuleInfo(modulePath: string): ModuleInfo | null {
  * Install a module from a git URL or npm package.
  */
 export function installModule(source: string): ModuleInfo {
-  if (!existsSync(MODULES_DIR)) {
+  if (!existsSync(MODULES_DIR())) {
     const { mkdirSync } = require('fs')
-    mkdirSync(MODULES_DIR, { recursive: true })
+    mkdirSync(MODULES_DIR(), { recursive: true })
   }
 
   // Determine module name from source
@@ -237,7 +238,7 @@ export function installModule(source: string): ModuleInfo {
     name = source.replace(/^datacore-/, '').replace(/^module-/, '')
   }
 
-  const modulePath = join(MODULES_DIR, name)
+  const modulePath = join(MODULES_DIR(), name)
 
   if (existsSync(modulePath)) {
     throw new Error(`Module already installed: ${name}`)
@@ -326,7 +327,7 @@ export function updateModules(name?: string): Array<{ name: string; updated: boo
  * Remove a module.
  */
 export function removeModule(name: string): boolean {
-  const modulePath = join(MODULES_DIR, name)
+  const modulePath = join(MODULES_DIR(), name)
 
   if (!existsSync(modulePath)) {
     return false

@@ -917,7 +917,17 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
 
       const pullSpinner = isTTY ? new Spinner('Pulling latest changes...') : null
       pullSpinner?.start()
-      if (runArgs('git', ['pull', '--rebase', '--autostash'], { cwd: DATA_DIR, timeout: 60000 })) {
+      // MERGE, and NEVER --autostash (DIP-0046). This runs against an ALREADY
+      // POPULATED ~/Data — someone's real work — so both halves of the old
+      // flags were live hazards here. Rebase rewrites unpushed local commits;
+      // --autostash keeps the stash when its pop conflicts, which is precisely
+      // how conflict markers got written into org files and blocked briefing
+      // delivery for three days (2026-08-03).
+      //
+      // A plain merge pull REFUSES when the tree is dirty rather than moving
+      // the user's changes somewhere they will not think to look. Refusing is
+      // the safe outcome, and the failure path below is already non-fatal.
+      if (runArgs('git', ['pull', '--no-rebase'], { cwd: DATA_DIR, timeout: 60000 })) {
         pullSpinner?.succeed('Repository up to date')
       } else {
         pullSpinner?.fail('Pull failed (non-fatal, continuing)')

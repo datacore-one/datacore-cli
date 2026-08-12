@@ -18,8 +18,9 @@ import { updateDatacore } from './lib/upgrade'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
 import * as app from './lib/app'
+import { VERSION } from './version'
 
-const VERSION = '1.3.1'
+
 
 const args = process.argv.slice(2)
 const parsed = parseArgs(args)

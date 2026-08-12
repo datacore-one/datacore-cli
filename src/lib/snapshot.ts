@@ -13,10 +13,15 @@ import { listSpaces } from './space'
 import { listModules } from './module'
 import { checkDependencies, checkDatacore } from './dependency'
 import { loadConfig } from '../config'
+import { dataDir } from './paths'
+import { VERSION } from '../version'
 
-const DATA_DIR = join(process.env.HOME || '~', 'Data')
-const LOCK_FILE = join(DATA_DIR, 'datacore.lock.yaml')
-const CLI_VERSION = '1.0.6'
+// Resolved per call, NOT frozen at import: the test suite points DATACORE_ROOT
+// at a fixture, and a module-load constant would capture the developer's real
+// ~/Data before any test could redirect it.
+const DATA_DIR = () => dataDir()
+const LOCK_FILE = () => join(dataDir(), 'datacore.lock.yaml')
+
 
 export interface ModuleLock {
   name: string
@@ -132,7 +137,7 @@ export function createSnapshot(options: { includeSettings?: boolean } = {}): Sna
   const snapshot: Snapshot = {
     version: '1.0',
     created: new Date().toISOString(),
-    cliVersion: CLI_VERSION,
+    cliVersion: VERSION,
     platform: `${process.platform}-${process.arch}`,
     modules,
     spaces,
@@ -141,7 +146,7 @@ export function createSnapshot(options: { includeSettings?: boolean } = {}): Sna
 
   // Optionally include settings (base only, not local)
   if (includeSettings) {
-    const settingsPath = join(DATA_DIR, '.datacore', 'settings.yaml')
+    const settingsPath = join(DATA_DIR(), '.datacore', 'settings.yaml')
     if (existsSync(settingsPath)) {
       try {
         const content = readFileSync(settingsPath, 'utf-8')
@@ -159,7 +164,7 @@ export function createSnapshot(options: { includeSettings?: boolean } = {}): Sna
  * Save a snapshot to the lock file.
  */
 export function saveSnapshot(snapshot: Snapshot, path?: string): string {
-  const lockPath = path || LOCK_FILE
+  const lockPath = path || LOCK_FILE()
   const content = stringify(snapshot, {
     lineWidth: 0,  // Don't wrap lines
   })
@@ -171,7 +176,7 @@ export function saveSnapshot(snapshot: Snapshot, path?: string): string {
  * Load a snapshot from a lock file.
  */
 export function loadSnapshot(path?: string): Snapshot | null {
-  const lockPath = path || LOCK_FILE
+  const lockPath = path || LOCK_FILE()
   if (!existsSync(lockPath)) {
     return null
   }
@@ -310,7 +315,7 @@ export function restoreFromSnapshot(
       }
 
       try {
-        const modulesDir = join(DATA_DIR, '.datacore', 'modules')
+        const modulesDir = join(DATA_DIR(), '.datacore', 'modules')
         if (!existsSync(modulesDir)) {
           mkdirSync(modulesDir, { recursive: true })
         }
@@ -353,7 +358,7 @@ export function restoreFromSnapshot(
       // Only create the space if it has a git source (can be cloned)
       if (space.source) {
         try {
-          const spacePath = join(DATA_DIR, space.name)
+          const spacePath = join(DATA_DIR(), space.name)
           execSync(`git clone ${space.source} "${spacePath}"`, { stdio: 'pipe' })
 
           if (space.commit) {
@@ -377,5 +382,5 @@ export function restoreFromSnapshot(
  * Check if a lock file exists.
  */
 export function lockFileExists(path?: string): boolean {
-  return existsSync(path || LOCK_FILE)
+  return existsSync(path || LOCK_FILE())
 }

@@ -58,6 +58,10 @@ async function handleMeta(
 
       if (format === 'json') {
         output(result, format)
+        // Exiting 0 on a failed init tells every caller that cannot parse
+        // JSON — shell scripts, CI, and any agent following install.txt —
+        // that the install worked. It did not.
+        if (!result.success) process.exitCode = 1
       } else {
         if (result.success) {
           console.log()

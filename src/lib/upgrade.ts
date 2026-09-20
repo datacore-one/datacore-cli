@@ -244,8 +244,29 @@ function upgradeDependencies(
 // Step 4: MCP configuration
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** MCP config entry using global npm install binary */
-const MCP_ENTRY = { command: 'datacore-mcp' }
+/** MCP config entries using the globally installed binaries.
+ *
+ * Both servers are written together. Datacore organises and PLUR remembers;
+ * configuring one without the other yields an assistant that can read your
+ * notes but forgets every correction, which users report as a broken product
+ * rather than a partial install.
+ */
+const MCP_ENTRIES: Record<string, { command: string }> = {
+  datacore: { command: 'datacore-mcp' },
+  plur: { command: 'plur-mcp' },
+}
+
+/** Add any missing server to `servers`. Returns the names actually added. */
+function addMissingServers(servers: Record<string, unknown>): string[] {
+  const added: string[] = []
+  for (const [name, entry] of Object.entries(MCP_ENTRIES)) {
+    if (!servers[name]) {
+      servers[name] = entry
+      added.push(name)
+    }
+  }
+  return added
+}
 
 type McpTarget = 'code' | 'desktop' | 'both'
 
@@ -276,12 +297,12 @@ function configureMcpForDesktop(isTTY: boolean, result: UpdateResult): boolean {
     }
 
     const servers = (config.mcpServers || {}) as Record<string, unknown>
-    if (!servers.datacore) {
-      servers.datacore = MCP_ENTRY
+    const added = addMissingServers(servers)
+    if (added.length) {
       config.mcpServers = servers
       writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Desktop configured`)
-      result.updated.push('MCP configured for Claude Desktop')
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Desktop configured ${c.dim}(${added.join(', ')})${c.reset}`)
+      result.updated.push(`MCP configured for Claude Desktop (${added.join(', ')})`)
     } else {
       if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Desktop ${c.dim}(already configured)${c.reset}`)
       result.alreadyCurrent.push('MCP: Claude Desktop')
@@ -302,12 +323,12 @@ function configureMcpForCode(isTTY: boolean, result: UpdateResult): boolean {
     }
 
     const servers = (config.mcpServers || {}) as Record<string, unknown>
-    if (!servers.datacore) {
-      servers.datacore = MCP_ENTRY
+    const added = addMissingServers(servers)
+    if (added.length) {
       config.mcpServers = servers
       writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2) + '\n')
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code configured`)
-      result.updated.push('MCP configured for Claude Code')
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code configured ${c.dim}(${added.join(', ')})${c.reset}`)
+      result.updated.push(`MCP configured for Claude Code (${added.join(', ')})`)
     } else {
       if (isTTY) console.log(`  ${c.green}✓${c.reset} Claude Code ${c.dim}(already configured)${c.reset}`)
       result.alreadyCurrent.push('MCP: Claude Code')
@@ -382,9 +403,11 @@ async function upgradeMcpConfig(
     console.log(`${c.bold}MCP Server${c.reset}`)
   }
 
-  // Check if MCP is even installed
-  if (!commandExists('datacore-mcp')) {
-    if (isTTY) console.log(`  ${c.dim}○ datacore-mcp not installed, skipping configuration${c.reset}`)
+  // Skip only when NEITHER server is present. Keying this on datacore-mcp
+  // alone meant a machine with PLUR installed but datacore-mcp missing
+  // skipped configuring both, leaving a working server unregistered.
+  if (!commandExists('datacore-mcp') && !commandExists('plur-mcp')) {
+    if (isTTY) console.log(`  ${c.dim}○ no MCP servers installed, skipping configuration${c.reset}`)
     if (isTTY) console.log()
     return
   }
@@ -584,4 +607,4 @@ export async function updateDatacore(options: UpdateOptions = {}): Promise<Updat
 }
 
 /** Exported for init.ts to reuse */
-export { MCP_ENTRY, configureMcpForCode, configureMcpForDesktop }
+export { MCP_ENTRIES, configureMcpForCode, configureMcpForDesktop }

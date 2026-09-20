@@ -87,6 +87,17 @@ export function getInstallCommand(pkg: string, platform: Platform): string | nul
       windows: 'npm install -g @datacore-one/mcp',
       unknown: 'npm install -g @datacore-one/mcp',
     },
+    // PLUR is not an optional companion. Datacore organises; PLUR remembers.
+    // An install without it produces an assistant that forgets every
+    // correction between sessions, which reads as the product being broken
+    // rather than incomplete.
+    'plur-mcp': {
+      macos: 'npm install -g @plur-ai/mcp',
+      linux: 'npm install -g @plur-ai/mcp',
+      wsl: 'npm install -g @plur-ai/mcp',
+      windows: 'npm install -g @plur-ai/mcp',
+      unknown: 'npm install -g @plur-ai/mcp',
+    },
   }
 
   return commands[pkg]?.[platform] ?? null

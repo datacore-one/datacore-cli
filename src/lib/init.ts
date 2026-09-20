@@ -35,7 +35,7 @@ import { spawnBackground, type BackgroundJob } from './background'
 const DATA_DIR = join(process.env.HOME || '', 'Data')
 const DATACORE_DIR = join(DATA_DIR, '.datacore')
 const UPSTREAM_REPO = 'datacore-one/datacore'
-const TOTAL_STEPS = 9
+const TOTAL_STEPS = 10
 
 /**
  * Known team spaces that users can select during init.
@@ -313,12 +313,34 @@ async function ensureDependency(
     spinner?.fail(`${name} install completed but command not found in PATH`)
     if (isTTY) console.log(`    ${c.dim}Try manually: ${installCmd}${c.reset}`)
     return { available: false, wasInstalled: false }
-  } catch {
+  } catch (e) {
+    // Say WHY. A bare "failed to install" on a machine whose npm prefix is
+    // root-owned (the default for a system-wide node, so most Linux boxes and
+    // every clean container) sends people hunting for a network or registry
+    // problem. The install is fine; the directory is not writable.
+    const detail = String((e as { stderr?: Buffer }).stderr ?? (e as Error).message ?? '')
+    const permissionDenied = /EACCES|permission denied|EPERM/i.test(detail)
     spinner?.fail(`Failed to install ${name}`)
-    if (isTTY) console.log(`    ${c.dim}Try manually: ${installCmd}${c.reset}`)
+    if (permissionDenied) {
+      const hint = `npm's global directory is not writable by this user, so ${name} could not be installed.`
+      if (isTTY) {
+        console.log(`    ${c.dim}${hint}${c.reset}`)
+        console.log(`    ${c.dim}Fix with EITHER:${c.reset}`)
+        console.log(`    ${c.dim}  sudo ${installCmd}${c.reset}`)
+        console.log(`    ${c.dim}  npm config set prefix ~/.npm-global && export PATH=~/.npm-global/bin:$PATH${c.reset}`)
+      }
+      permissionFailures.push(`${name}: sudo ${installCmd}`)
+    } else if (isTTY) {
+      console.log(`    ${c.dim}Try manually: ${installCmd}${c.reset}`)
+    }
     return { available: false, wasInstalled: false }
   }
 }
+
+/** Dependencies that failed specifically because npm's global dir is not
+ *  writable. Collected so init reports one actionable cause instead of a
+ *  list of failures that each look like their own unrelated problem. */
+const permissionFailures: string[] = []
 
 /**
  * Ensure Homebrew is available on macOS (required for other installs).
@@ -460,6 +482,149 @@ function countFiles(dir: string): { total: number; byExt: Record<string, number>
 
   walk(dir)
   return { total, byExt }
+}
+
+/**
+ * True when ~/Data holds nothing but this installer's own bookkeeping.
+ *
+ * init starts an operation log at $DATA_DIR/.datacore/state before it clones,
+ * so on a genuinely fresh machine the directory is non-empty by the time git
+ * runs and the clone refuses with "already exists and is not an empty
+ * directory". The install then demands --force on a first run, against a
+ * directory nothing but init had ever touched.
+ *
+ * This never sees a dev machine, where ~/Data is already a git repo and the
+ * clone takes an entirely different branch. It took a clean container.
+ *
+ * Deliberately narrow: ONLY our own state counts as empty. Anything the user
+ * put there still stops the clone, which is the protection that matters.
+ */
+function containsOnlyOwnState(dir: string): boolean {
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return false
+  }
+  if (entries.length === 0) return true
+  if (entries.length > 1 || entries[0] !== '.datacore') return false
+  try {
+    const inner = readdirSync(join(dir, '.datacore'))
+    return inner.every(e => e === 'state')
+  } catch {
+    return false
+  }
+}
+
+// ─── Helpers: Chief of Staff ─────────────────────────────────────────────────
+
+/** Tone presets. Free text is always allowed; these just save typing. */
+const COS_TONES: { label: string; line: string }[] = [
+  { label: 'Direct — says the thing, no preamble',
+    line: 'Be direct. Lead with the answer, then the reasoning. No preamble, no filler.' },
+  { label: 'Warm — encouraging, still honest',
+    line: 'Be warm and encouraging without softening bad news. Say hard things kindly, not vaguely.' },
+  { label: 'Formal — precise, analytical',
+    line: 'Be formal and precise. Prefer analysis to opinion. Avoid contractions and colloquialisms.' },
+  { label: 'Dry — brief, understated wit',
+    line: 'Be brief and dry. Understatement over enthusiasm. Never pad a short answer.' },
+]
+
+/**
+ * Name the Chief of Staff and give it a personality.
+ *
+ * THE SLUG STAYS `winston`. The chief-of-staff module, the app's agent
+ * registry and the server all reference that slug; renaming the file would
+ * unwire them and the user would get a differently-named assistant that no
+ * longer runs their briefing. The chosen name is `displayName` — what the
+ * user sees — while the slug remains the stable wiring identifier.
+ *
+ * Written to $DATACORE_ROOT/.datacore/personas/, which both persona loaders
+ * prefer over the bundled set, so the customisation survives upgrades.
+ */
+async function configureChiefOfStaff(isTTY: boolean | undefined, result: InitResult): Promise<void> {
+  const personasDir = join(DATACORE_DIR, 'personas')
+  const target = join(personasDir, 'winston.md')
+
+  let name = 'Winston'
+  let tone = COS_TONES[0]!.line
+  let extra = ''
+
+  if (isTTY) {
+    name = (await prompt('  What should your Chief of Staff be called', 'Winston')).trim() || 'Winston'
+    const idx = await choose('  Tone', COS_TONES.map(t => t.label), 0)
+    tone = (COS_TONES[idx] ?? COS_TONES[0]!).line
+    console.log()
+    console.log(`  ${c.dim}Anything else it should know about how you want to be worked with?${c.reset}`)
+    console.log(`  ${c.dim}(e.g. "I trade in the mornings, never schedule before 10am." Enter to skip)${c.reset}`)
+    extra = (await prompt('  Personality notes', '')).trim()
+  }
+
+  if (existsSync(target)) {
+    // Never clobber a personality the user already wrote. Re-running init is
+    // a routine repair action and must not silently reset their assistant.
+    if (isTTY) console.log(`  ${c.green}✓${c.reset} Chief of Staff ${c.dim}(existing personality kept)${c.reset}`)
+    result.configured.push('Chief of Staff persona (existing kept)')
+    return
+  }
+
+  try {
+    mkdirSync(personasDir, { recursive: true })
+    const body = [
+      '---',
+      `displayName: ${name}`,
+      'role: Chief of Staff',
+      '---',
+      '',
+      `You are ${name}, the principal's Chief of Staff.`,
+      '',
+      tone,
+      '',
+      extra ? `How they want to be worked with: ${extra}` : '',
+      '',
+      'You act only through the approvals queue. Nothing side-effecting happens',
+      'without the principal deciding it.',
+      '',
+    ].filter(l => l !== undefined).join('\n')
+    writeFileSync(target, body.replace(/\n{3,}/g, '\n\n'))
+    if (isTTY) console.log(`  ${c.green}✓${c.reset} ${name} configured ${c.dim}(${target})${c.reset}`)
+    result.configured.push(`Chief of Staff: ${name}`)
+    result.nextSteps.push(`Edit ${name}'s personality any time: ${target}`)
+  } catch (e) {
+    result.warnings.push(`Could not write the Chief of Staff persona: ${(e as Error).message}`)
+  }
+}
+
+// ─── Helpers: Desktop app ────────────────────────────────────────────────────
+
+/** Where the desktop build is published. */
+const DESKTOP_APP_URL = 'https://datacore.one/app'
+
+/**
+ * Offer the desktop app as the last thing, once the install works.
+ *
+ * Offered rather than installed: it is a GUI download, and a CLI that opens
+ * a browser window without asking is a surprise at the end of a long flow.
+ * Declining leaves a working terminal install, which is the supported path.
+ */
+async function offerDesktopApp(isTTY: boolean | undefined, result: InitResult): Promise<void> {
+  if (!isTTY) {
+    result.nextSteps.push(`Desktop app (optional): ${DESKTOP_APP_URL}`)
+    return
+  }
+  console.log()
+  console.log(`  ${c.bold}Desktop app${c.reset}`)
+  console.log(`  ${c.dim}Datacore also runs as a desktop app \u2014 the same second brain with`)
+  console.log(`  panels, chat and your Chief of Staff in one window.${c.reset}`)
+  console.log()
+  if (await confirm('  Open the download page now?', false)) {
+    const opener = process.platform === 'darwin' ? 'open'
+      : process.platform === 'win32' ? 'start' : 'xdg-open'
+    if (!runArgs(opener, [DESKTOP_APP_URL])) {
+      console.log(`  ${c.dim}Could not open a browser. Visit: ${DESKTOP_APP_URL}${c.reset}`)
+    }
+  }
+  result.nextSteps.push(`Desktop app (optional): ${DESKTOP_APP_URL}`)
 }
 
 // ─── Helpers: MCP Configuration ──────────────────────────────────────────────
@@ -633,7 +798,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 1/9: ABOUT YOU
+    // STEP 1/10: ABOUT YOU
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('about_you')
     op.startStep('about_you')
@@ -678,7 +843,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('about_you')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 2/9: SYSTEM SETUP
+    // STEP 2/10: SYSTEM SETUP
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('system_setup')
     op.startStep('system_setup')
@@ -773,6 +938,17 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         result.warnings.push('Datacore MCP not installed - install with: npm install -g @datacore-one/mcp')
       }
 
+      // --- PLUR MCP server (memory) ---
+      // Installed unconditionally: Datacore without PLUR is an assistant that
+      // forgets every correction between sessions.
+      const plur = await ensureDependency('plur-mcp', 'plur-mcp', platform, !!isTTY)
+      if (plur.available && !plur.wasInstalled && isTTY) {
+        console.log(`  ${c.green}✓${c.reset} PLUR memory ${c.dim}(${plur.version})${c.reset}`)
+      }
+      if (!plur.available) {
+        result.warnings.push('PLUR not installed - install with: npm install -g @plur-ai/mcp')
+      }
+
       // --- python ---
       const python = await ensureDependency('python', 'python3', platform, !!isTTY)
       if (python.available && !python.wasInstalled && isTTY) {
@@ -842,7 +1018,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('system_setup')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 3/9: SETTING UP REPOSITORY
+    // STEP 3/10: SETTING UP REPOSITORY
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('clone_repo')
     op.startStep('clone_repo')
@@ -968,7 +1144,12 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         }
       } else if (lastCloneErr.includes('already exists and is not an empty directory')) {
         // ── Case C: Directory not empty → need git init approach ──────
-        if (!force) {
+        // A directory holding only our own operation log is a FIRST RUN, not
+        // a user's populated ~/Data. Take the git-init path without demanding
+        // --force, or every fresh install fails on the state dir init itself
+        // just wrote.
+        const onlyOurs = containsOnlyOwnState(DATA_DIR)
+        if (!force && !onlyOurs) {
           cloneSpinner?.fail('~/Data is not empty')
           const entries = readdirSync(DATA_DIR)
           if (isTTY) {
@@ -982,7 +1163,8 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
           return result
         }
 
-        // --force: initialize git in the existing directory
+        // --force, or a first run whose only contents are ours:
+        // initialize git in the existing directory
         cloneSpinner?.update('Initializing git in existing ~/Data...')
 
         let initOk = false
@@ -1077,7 +1259,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('clone_repo')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 4/9: TEAM SPACES
+    // STEP 4/10: TEAM SPACES
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('team_spaces')
     op.startStep('team_spaces')
@@ -1222,7 +1404,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('team_spaces')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 5/9: YOUR SECOND BRAIN
+    // STEP 5/10: YOUR SECOND BRAIN
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('second_brain')
     op.startStep('second_brain')
@@ -1383,7 +1565,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('second_brain')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 6/9: MODULES
+    // STEP 6/10: MODULES
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('modules')
     op.startStep('modules')
@@ -1488,13 +1670,31 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('modules')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 7/9: FINALIZE
+    // STEP 7/10: CHIEF OF STAFF
+    // ═════════════════════════════════════════════════════════════════════
+    op.addStep('chief_of_staff')
+    op.startStep('chief_of_staff')
+
+    if (isTTY) {
+      section(`Step 7/${TOTAL_STEPS}: Your Chief of Staff`)
+      console.log()
+      console.log(`  Your Chief of Staff runs your day: the morning briefing, the`)
+      console.log(`  evening review, triage. It acts only through approvals \u2014 nothing`)
+      console.log(`  side-effecting happens without your decision.`)
+      console.log()
+    }
+
+    await configureChiefOfStaff(isTTY, result)
+    op.completeStep('chief_of_staff')
+
+    // ═════════════════════════════════════════════════════════════════════
+    // STEP 8/10: FINALIZE
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('finalize')
     op.startStep('finalize')
 
     if (isTTY) {
-      section(`Step 7/${TOTAL_STEPS}: Finalize`)
+      section(`Step 8/${TOTAL_STEPS}: Finalize`)
       console.log()
     }
 
@@ -1624,7 +1824,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('finalize')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 8/9: IMPORT YOUR DATA
+    // STEP 9/10: IMPORT YOUR DATA
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('import_data')
     op.startStep('import_data')
@@ -1633,7 +1833,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     const canBackgroundIngest = commandExists('datacore') && commandExists('claude')
 
     if (interactive) {
-      section(`Step 8/${TOTAL_STEPS}: Import Your Data`)
+      section(`Step 9/${TOTAL_STEPS}: Import Your Data`)
       console.log()
       console.log(`  ${c.dim}Your second brain works best when it has your existing knowledge.${c.reset}`)
       console.log(`  ${c.dim}You can import data now or do it later with 'datacore ingest'.${c.reset}`)
@@ -1813,7 +2013,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     op.completeStep('import_data')
 
     // ═════════════════════════════════════════════════════════════════════
-    // STEP 9/9: VERIFICATION
+    // STEP 10/10: VERIFICATION
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('verification')
     op.startStep('verification')
@@ -1821,7 +2021,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     const claudeAvailable = commandExists('claude')
 
     if (claudeAvailable && isTTY) {
-      section(`Step 9/${TOTAL_STEPS}: Verification`)
+      section(`Step 10/${TOTAL_STEPS}: Verification`)
       console.log()
       console.log(`  ${c.dim}Running AI verification to check everything is configured correctly...${c.reset}`)
       console.log()
@@ -1884,7 +2084,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
 
       console.log()
     } else if (isTTY) {
-      section(`Step 9/${TOTAL_STEPS}: Verification`)
+      section(`Step 10/${TOTAL_STEPS}: Verification`)
       console.log()
       console.log(`  ${c.yellow}○${c.reset} Claude Code not available ${c.dim}(skipping verification)${c.reset}`)
       console.log(`  ${c.dim}Run /structural-integrity in Claude Code to verify later.${c.reset}`)
@@ -1896,13 +2096,27 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     // ═════════════════════════════════════════════════════════════════════
     // SUCCESS
     // ═════════════════════════════════════════════════════════════════════
+    if (permissionFailures.length) {
+      result.warnings.push(
+        "npm's global directory is not writable by this user, so " +
+        `${permissionFailures.length} dependency install(s) failed: ` +
+        permissionFailures.join('; ') +
+        ' — or point npm at a user-owned prefix: ' +
+        'npm config set prefix ~/.npm-global && export PATH=~/.npm-global/bin:$PATH',
+      )
+    }
+
     result.success = true
-    result.nextSteps = [
+    // Append, never assign: steps pushed by earlier phases (the Chief of
+    // Staff persona path, for one) were being discarded by a bare assignment.
+    result.nextSteps.push(
       `cd ${DATA_DIR} && claude`,
       'Run /today for your first daily briefing',
       'Process inbox with /gtd-daily-start',
       'Run datacore doctor to check system health',
-    ]
+    )
+
+    await offerDesktopApp(isTTY, result)
 
     if (isTTY) {
       console.log(INIT_COMPLETE)

@@ -597,8 +597,15 @@ async function configureChiefOfStaff(isTTY: boolean | undefined, result: InitRes
 
 // ─── Helpers: Desktop app ────────────────────────────────────────────────────
 
-/** Where the desktop build is published. */
-const DESKTOP_APP_URL = 'https://datacore.one/app'
+/** Where the desktop build is published.
+ *
+ * The .html is load-bearing: datacore.one serves real pages only at their
+ * exact filename and falls back to the HOMEPAGE for anything else, with a
+ * 200. So `/app` did not 404 — it quietly served the front page, which looks
+ * like the link working right up until the user wonders where the download
+ * went. An extensionless URL here is a silent wrong answer.
+ */
+const DESKTOP_APP_URL = 'https://datacore.one/app.html'
 
 /**
  * Offer the desktop app as the last thing, once the install works.

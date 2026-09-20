@@ -32,4 +32,6 @@ ENV NPM_CONFIG_PREFIX=/home/tester/.npm-global
 ENV PATH=/home/tester/.npm-global/bin:$PATH
 RUN mkdir -p /home/tester/.npm-global
 
+COPY interactive-init.py /home/tester/interactive-init.py
+
 CMD ["bash"]

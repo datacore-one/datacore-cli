@@ -25,6 +25,7 @@ import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { AVAILABLE_MODULES, installModule, listModules } from './module'
 import { listSpaces } from './space'
 import { invokeAgent } from './agent'
+import { FALLBACK_NPM_PREFIX, resolveBinary, unresolvableMcpServers } from './upgrade'
 import { createSnapshot, saveSnapshot } from './snapshot'
 import { startOperation } from '../state'
 import { BANNER, INIT_COMPLETE, Spinner, sleep, section } from './animation'
@@ -230,6 +231,10 @@ function runArgsOutput(cmd: string, args: string[], opts?: { timeout?: number })
 }
 
 function commandExists(cmd: string): boolean {
+  // resolveBinary also looks in npm's configured prefix and our fallback
+  // prefix. `which` alone reported binaries as missing that were installed
+  // and working, purely because the prefix bin was not on PATH.
+  if (resolveBinary(cmd)) return true
   try {
     execFileSync('which', [cmd], { stdio: 'pipe' })
     return true
@@ -321,13 +326,35 @@ async function ensureDependency(
     const detail = String((e as { stderr?: Buffer }).stderr ?? (e as Error).message ?? '')
     const permissionDenied = /EACCES|permission denied|EPERM/i.test(detail)
     spinner?.fail(`Failed to install ${name}`)
-    if (permissionDenied) {
+    if (permissionDenied && installCmd.startsWith('npm install -g ')) {
+      // Retry into a prefix WE own rather than asking for sudo. The MCP config
+      // records absolute paths, so a binary here works without the user ever
+      // touching PATH — which is the half of the usual remedy people skip,
+      // and the reason an install could look complete and launch nothing.
+      const pkg = installCmd.replace('npm install -g ', '').trim()
+      const fallbackBin = join(FALLBACK_NPM_PREFIX, 'bin', checkCmd)
+      try {
+        mkdirSync(FALLBACK_NPM_PREFIX, { recursive: true })
+        execFileSync('npm', ['install', '--prefix', FALLBACK_NPM_PREFIX, '-g', pkg],
+                     { stdio: 'pipe', timeout: 300000 })
+      } catch { /* fall through to the report below */ }
+      if (existsSync(fallbackBin)) {
+        const version = getVersionString(fallbackBin, versionFlag)
+        spinner?.succeed(`${name} installed${version ? ` (${version})` : ''} (user prefix)`)
+        userPrefixInstalls.push(name)
+        return { available: true, version, wasInstalled: true }
+      }
+      const hint = `npm's global directory is not writable and the user-prefix fallback also failed for ${name}.`
+      if (isTTY) {
+        console.log(`    ${c.dim}${hint}${c.reset}`)
+        console.log(`    ${c.dim}Try: sudo ${installCmd}${c.reset}`)
+      }
+      permissionFailures.push(`${name}: sudo ${installCmd}`)
+    } else if (permissionDenied) {
       const hint = `npm's global directory is not writable by this user, so ${name} could not be installed.`
       if (isTTY) {
         console.log(`    ${c.dim}${hint}${c.reset}`)
-        console.log(`    ${c.dim}Fix with EITHER:${c.reset}`)
-        console.log(`    ${c.dim}  sudo ${installCmd}${c.reset}`)
-        console.log(`    ${c.dim}  npm config set prefix ~/.npm-global && export PATH=~/.npm-global/bin:$PATH${c.reset}`)
+        console.log(`    ${c.dim}Try: sudo ${installCmd}${c.reset}`)
       }
       permissionFailures.push(`${name}: sudo ${installCmd}`)
     } else if (isTTY) {
@@ -341,6 +368,10 @@ async function ensureDependency(
  *  writable. Collected so init reports one actionable cause instead of a
  *  list of failures that each look like their own unrelated problem. */
 const permissionFailures: string[] = []
+
+/** Installed into ~/.datacore/npm because the global prefix was read-only.
+ *  Reported so the user knows where their binaries went. */
+const userPrefixInstalls: string[] = []
 
 /**
  * Ensure Homebrew is available on macOS (required for other installs).
@@ -773,6 +804,7 @@ export function isInitialized(): boolean {
 export async function initDatacore(options: InitOptions = {}): Promise<InitResult> {
   const { nonInteractive = false, skipChecks = false, stream = false, verbose = false, force = false } = options
   const isTTY = stream && process.stdout.isTTY
+
   const interactive = isTTY && !nonInteractive
   const platform = detectPlatform()
 
@@ -785,6 +817,22 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     nextSteps: [],
     spacesCreated: [],
     modulesInstalled: [],
+  }
+
+  // Without a TTY every prompt is skipped and the wizard accepts EVERY
+  // default in silence — the user is never asked their name, their modules,
+  // or what to call their Chief of Staff, and the run still exits 0. That is
+  // precisely what an agent does when it pipes output, so the quiet path was
+  // the likeliest one in practice. Taking the defaults is fine; doing it
+  // without anyone choosing to is not, so it now has to be asked for.
+  if (!isTTY && !options.nonInteractive) {
+    result.errors.push(
+      'Not a terminal, so every prompt would be skipped and all defaults taken ' +
+      'silently (including naming your Chief of Staff "Winston"). Re-run in a ' +
+      'terminal you can type into, or pass --yes to accept the defaults ' +
+      'deliberately.',
+    )
+    return result
   }
 
   const op = startOperation('init', { options })
@@ -925,6 +973,21 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
           if (isTTY) console.log(`    ${c.yellow}⚠${c.reset} ${c.dim}Node ${node.version} is outdated. Consider updating to Node 20+${c.reset}`)
           result.warnings.push(`Node.js ${node.version} is outdated - recommend Node 20+`)
         }
+      }
+
+      // --- Node version ---
+      // package.json says >=20 but npm does not enforce engines, so an
+      // 18.x machine installs and runs to completion and only trips later on
+      // whatever 20-only syntax it eventually reaches. Say it at install time.
+      const nodeMajor = Number(process.versions.node.split('.')[0])
+      if (nodeMajor < 20) {
+        if (isTTY) {
+          console.log(`  ${c.dim}! Node ${process.versions.node} is below the supported 20+.${c.reset}`)
+        }
+        result.warnings.push(
+          `Node ${process.versions.node} is below the supported minimum (20). ` +
+          'The install may complete and fail later. Upgrade with: nvm install 20',
+        )
       }
 
       // --- Claude Code (most critical tool) ---
@@ -1192,7 +1255,17 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
           }
         } else {
           cloneSpinner?.fail('Could not initialize git')
-          result.errors.push(`Git init failed: ${lastInitErr}`)
+          // "cannot run ssh: No such file or directory" is what an offline
+          // machine actually reports, and it sends people hunting for an ssh
+          // problem they do not have. Name the likely cause instead of
+          // forwarding git's wording unedited.
+          const offline = /cannot run ssh|could not resolve host|network is unreachable|temporary failure in name resolution|connection timed out/i
+            .test(lastInitErr)
+          result.errors.push(
+            offline
+              ? `Could not reach GitHub — check the network (and that ssh is installed). Underlying error: ${lastInitErr.trim().split('\n')[0]}`
+              : `Git init failed: ${lastInitErr}`,
+          )
           if (lastInitErr.includes('Authentication') || lastInitErr.includes('403') || lastInitErr.includes('401')) {
             if (isTTY) console.log(`    ${c.dim}Check your GitHub access: gh auth status${c.reset}`)
           }
@@ -2103,6 +2176,44 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     // ═════════════════════════════════════════════════════════════════════
     // SUCCESS
     // ═════════════════════════════════════════════════════════════════════
+    if (userPrefixInstalls.length) {
+      result.warnings.push(
+        `npm's global directory was not writable, so ${userPrefixInstalls.join(', ')} ` +
+        `installed into ${FALLBACK_NPM_PREFIX}/bin instead. MCP config records ` +
+        'absolute paths, so this works as-is; add that directory to PATH if you ' +
+        'want to run them by name.',
+      )
+    }
+
+    // Modules that could not be cloned are usually PRIVATE repos the user has
+    // no access to, which is expected and must not fail the install. What was
+    // wrong was the silence: three modules vanished into the warnings list and
+    // the summary still read like a complete setup.
+    const failedModules = result.warnings
+      .filter(w => /^Module .+ failed to install/.test(w))
+      .map(w => w.replace(/^Module (\S+).*/, '$1'))
+    if (failedModules.length && isTTY) {
+      console.log()
+      console.log(`  ${c.bold}${failedModules.length} module(s) not installed${c.reset} ${c.dim}(likely private repos you do not have access to)${c.reset}`)
+      console.log(`  ${c.dim}${failedModules.join(', ')}${c.reset}`)
+      console.log(`  ${c.dim}Datacore works without them. Re-run 'datacore init' after 'gh auth login' to retry.${c.reset}`)
+    }
+
+    const unresolvable = unresolvableMcpServers()
+    if (unresolvable.length) {
+      // The config entry is still written, so fixing PATH later just works —
+      // but an install whose MCP servers cannot be launched is not a success,
+      // and saying so is the difference between a user fixing it now and
+      // discovering it when their assistant silently has no tools.
+      result.errors.push(
+        `MCP server binary not found for: ${unresolvable.join(', ')}. ` +
+        'Claude Code will not be able to start ' +
+        (unresolvable.length > 1 ? 'them' : 'it') + '. ' +
+        'Install with: npm install -g ' +
+        unresolvable.map(n => n === 'plur' ? '@plur-ai/mcp' : '@datacore-one/mcp').join(' '),
+      )
+    }
+
     if (permissionFailures.length) {
       result.warnings.push(
         "npm's global directory is not writable by this user, so " +
@@ -2113,7 +2224,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       )
     }
 
-    result.success = true
+    result.success = unresolvable.length === 0
     // Append, never assign: steps pushed by earlier phases (the Chief of
     // Staff persona path, for one) were being discarded by a bare assignment.
     result.nextSteps.push(

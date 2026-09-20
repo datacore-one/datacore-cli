@@ -57,6 +57,39 @@ const c = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+
+/** Where we install when npm's global prefix is not writable (see init.ts). */
+export const FALLBACK_NPM_PREFIX = join(process.env.HOME || '', '.datacore', 'npm')
+
+/**
+ * Absolute path of a CLI binary, or null.
+ *
+ * Looks on PATH first, then in npm's configured global prefix, then in our
+ * fallback prefix. The last two matter because a binary can be installed and
+ * still be invisible to `which`: `npm config set prefix` without the matching
+ * PATH export is the state the standard EACCES remedy leaves behind, and it
+ * is extremely common.
+ */
+export function resolveBinary(cmd: string): string | null {
+  try {
+    const p = execFileSync('which', [cmd], { stdio: 'pipe' }).toString().trim()
+    if (p) return p
+  } catch { /* not on PATH — keep looking */ }
+
+  const candidates: string[] = []
+  try {
+    const prefix = execFileSync('npm', ['config', 'get', 'prefix'], { stdio: 'pipe' })
+      .toString().trim()
+    if (prefix && prefix !== 'undefined') candidates.push(join(prefix, 'bin', cmd))
+  } catch { /* npm not answering — fall through */ }
+  candidates.push(join(FALLBACK_NPM_PREFIX, 'bin', cmd))
+
+  for (const c of candidates) {
+    if (existsSync(c)) return c
+  }
+  return null
+}
+
 function commandExists(cmd: string): boolean {
   try {
     execFileSync('which', [cmd], { stdio: 'pipe' })
@@ -251,21 +284,48 @@ function upgradeDependencies(
  * notes but forgets every correction, which users report as a broken product
  * rather than a partial install.
  */
-const MCP_ENTRIES: Record<string, { command: string }> = {
-  datacore: { command: 'datacore-mcp' },
-  plur: { command: 'plur-mcp' },
+const MCP_BINARIES: Record<string, string> = {
+  datacore: 'datacore-mcp',
+  plur: 'plur-mcp',
+}
+
+/**
+ * The MCP entry for a server, preferring an ABSOLUTE path.
+ *
+ * Writing the bare command produced an install that reported success and did
+ * not work: the binaries were on disk, `which` could not see them because the
+ * npm prefix bin was not on PATH, and the config we wrote named a command the
+ * client could not launch. The user saw "Datacore MCP not installed" warnings
+ * next to a completed install, and Claude Code silently failed to start both
+ * servers.
+ *
+ * An absolute path is immune to whatever PATH the MCP client happens to run
+ * with, which is not the same PATH as the shell that ran the installer.
+ */
+function mcpEntry(name: string): { command: string } {
+  const bin = MCP_BINARIES[name]!
+  return { command: resolveBinary(bin) ?? bin }
 }
 
 /** Add any missing server to `servers`. Returns the names actually added. */
 function addMissingServers(servers: Record<string, unknown>): string[] {
   const added: string[] = []
-  for (const [name, entry] of Object.entries(MCP_ENTRIES)) {
+  for (const name of Object.keys(MCP_BINARIES)) {
     if (!servers[name]) {
-      servers[name] = entry
+      servers[name] = mcpEntry(name)
       added.push(name)
     }
   }
   return added
+}
+
+/** Server names whose binary cannot be found anywhere. Their config entry is
+ *  still written — a later PATH fix should just work — but the caller must
+ *  not report an install that launches nothing as a success. */
+export function unresolvableMcpServers(): string[] {
+  return Object.entries(MCP_BINARIES)
+    .filter(([, bin]) => resolveBinary(bin) === null)
+    .map(([name]) => name)
 }
 
 type McpTarget = 'code' | 'desktop' | 'both'
@@ -607,4 +667,4 @@ export async function updateDatacore(options: UpdateOptions = {}): Promise<Updat
 }
 
 /** Exported for init.ts to reuse */
-export { MCP_ENTRIES, configureMcpForCode, configureMcpForDesktop }
+export { configureMcpForCode, configureMcpForDesktop }

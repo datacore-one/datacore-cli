@@ -282,17 +282,45 @@ function isGitConfigured(): { name?: string; email?: string; configured: boolean
  * Attempt to install a system dependency.
  * Returns success and version after install.
  */
+/** `3.9.6` / `v24.21.0` / `git version 2.50.1` -> [3,9,6] */
+function parseVersion(s: string | undefined): number[] {
+  const m = (s ?? '').match(/(\d+)\.(\d+)(?:\.(\d+))?/)
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : []
+}
+
+function versionAtLeast(found: string | undefined, min: string): boolean {
+  const f = parseVersion(found), m = parseVersion(min)
+  if (!f.length) return false
+  for (let i = 0; i < m.length; i++) {
+    if ((f[i] ?? 0) > (m[i] ?? 0)) return true
+    if ((f[i] ?? 0) < (m[i] ?? 0)) return false
+  }
+  return true
+}
+
 async function ensureDependency(
   name: string,
   checkCmd: string,
   platform: Platform,
   isTTY: boolean,
   versionFlag = '--version',
-): Promise<{ available: boolean; version?: string; wasInstalled: boolean }> {
-  // Already available?
+  minVersion?: string,
+): Promise<{ available: boolean; version?: string; wasInstalled: boolean; tooOld?: boolean }> {
+  // Already available AND new enough?
+  //
+  // Presence alone was the test until 2026-09-21, and on macOS that made the
+  // Python check unfalsifiable: /usr/bin/python3 always exists and is 3.9, so
+  // `brew install python@3.11` — configured right there in platform.ts — could
+  // never run. The install then "succeeded" and failed later with a syntax
+  // error from PEP-604 unions, pointing at the wrong thing entirely.
   if (commandExists(checkCmd)) {
     const version = getVersionString(checkCmd, versionFlag)
-    return { available: true, version, wasInstalled: false }
+    if (!minVersion || versionAtLeast(version, minVersion)) {
+      return { available: true, version, wasInstalled: false }
+    }
+    if (isTTY) {
+      console.log(`  ${c.yellow}!${c.reset} ${name} ${version} is older than ${minVersion} — upgrading`)
+    }
   }
 
   // Get install command
@@ -301,31 +329,50 @@ async function ensureDependency(
     return { available: false, wasInstalled: false }
   }
 
-  const spinner = isTTY ? new Spinner(`Installing ${name}...`) : null
-  spinner?.start()
+  // SHOW THE WORK. `stdio: 'pipe'` discarded everything the install printed, so
+  // a 20-second bottle download and an 8-hour source build looked identical: a
+  // static spinner. On the first external install that ambiguity, not any single
+  // bug, is what made the user believe the machine had frozen. Homebrew can also
+  // prompt (sudo, Xcode CLT) and with stdin unattached that wait is invisible
+  // and unanswerable.
+  //
+  // So: name the command, stream its output, and report elapsed time as it runs.
+  if (isTTY) {
+    console.log(`  ${c.dim}installing ${name}: ${installCmd}${c.reset}`)
+    console.log(`  ${c.dim}(streaming below — this can take a few minutes)${c.reset}`)
+  }
+  const started = Date.now()
+  const ticker = isTTY ? setInterval(() => {
+    const s = Math.round((Date.now() - started) / 1000)
+    if (s >= 30 && s % 30 === 0) process.stdout.write(`  ${c.dim}… still installing ${name} (${s}s)${c.reset}\n`)
+  }, 1000) : null
 
   try {
-    // Install commands may contain shell operators (pipes, &&), so use bash
-    execFileSync('/bin/bash', ['-c', installCmd], { stdio: 'pipe', timeout: 300000 })
+    // Install commands may contain shell operators (pipes, &&), so use bash.
+    // `inherit` also connects stdin, so a prompt can actually be answered.
+    execFileSync('/bin/bash', ['-c', installCmd],
+                 { stdio: isTTY ? 'inherit' : 'pipe', timeout: 900000 })
 
+    if (ticker) clearInterval(ticker)
     // Verify it's now available
     if (commandExists(checkCmd)) {
       const version = getVersionString(checkCmd, versionFlag)
-      spinner?.succeed(`${name} installed${version ? ` (${version})` : ''}`)
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} ${name} installed${version ? ` (${version})` : ''}`)
       return { available: true, version, wasInstalled: true }
     }
 
-    spinner?.fail(`${name} install completed but command not found in PATH`)
+    if (isTTY) console.log(`  ${c.yellow}⚠${c.reset} ${name} install completed but command not found in PATH`)
     if (isTTY) console.log(`    ${c.dim}Try manually: ${installCmd}${c.reset}`)
     return { available: false, wasInstalled: false }
   } catch (e) {
+    if (ticker) clearInterval(ticker)
     // Say WHY. A bare "failed to install" on a machine whose npm prefix is
     // root-owned (the default for a system-wide node, so most Linux boxes and
     // every clean container) sends people hunting for a network or registry
     // problem. The install is fine; the directory is not writable.
     const detail = String((e as { stderr?: Buffer }).stderr ?? (e as Error).message ?? '')
     const permissionDenied = /EACCES|permission denied|EPERM/i.test(detail)
-    spinner?.fail(`Failed to install ${name}`)
+    if (isTTY) console.log(`  ${c.red}✗${c.reset} Failed to install ${name}`)
     if (permissionDenied && installCmd.startsWith('npm install -g ')) {
       // Retry into a prefix WE own rather than asking for sudo. The MCP config
       // records absolute paths, so a binary here works without the user ever
@@ -340,7 +387,7 @@ async function ensureDependency(
       } catch { /* fall through to the report below */ }
       if (existsSync(fallbackBin)) {
         const version = getVersionString(fallbackBin, versionFlag)
-        spinner?.succeed(`${name} installed${version ? ` (${version})` : ''} (user prefix)`)
+        if (isTTY) console.log(`  ${c.green}✓${c.reset} ${name} installed${version ? ` (${version})` : ''} (user prefix)`)
         userPrefixInstalls.push(name)
         return { available: true, version, wasInstalled: true }
       }
@@ -430,7 +477,7 @@ async function ensureHomebrew(isTTY: boolean): Promise<boolean> {
  * Run post-install dependencies for a module.
  * Checks for requirements.txt, package.json, or install.sh.
  */
-function runModulePostInstall(modulePath: string): { ran: boolean; success: boolean; type?: string } {
+export function runModulePostInstall(modulePath: string): { ran: boolean; success: boolean; type?: string } {
   // Check for Python dependencies
   const reqTxt = join(modulePath, 'requirements.txt')
   if (existsSync(reqTxt)) {
@@ -882,8 +929,6 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       ], 2)
       profile.useCase = (['personal', 'team', 'both'] as const)[useCaseIdx] ?? 'both'
 
-      console.log()
-      profile.role = await prompt(`  Your role (e.g., developer, founder, researcher)`, '')
 
       console.log()
       console.log(`  ${c.green}✓${c.reset} Welcome, ${c.bold}${profile.name || 'friend'}${c.reset}!`)
@@ -961,7 +1006,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
 
       // --- node ---
       // Node is likely already installed (user ran npm install to get this CLI)
-      const node = await ensureDependency('node', 'node', platform, !!isTTY, '-v')
+      const node = await ensureDependency('node', 'node', platform, !!isTTY, '-v', '20.0')
       if (node.available && !node.wasInstalled && isTTY) {
         console.log(`  ${c.green}✓${c.reset} node ${c.dim}(${node.version})${c.reset}`)
       }
@@ -1020,7 +1065,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       }
 
       // --- python ---
-      const python = await ensureDependency('python', 'python3', platform, !!isTTY)
+      const python = await ensureDependency('python', 'python3', platform, !!isTTY, '--version', '3.10')
       if (python.available && !python.wasInstalled && isTTY) {
         console.log(`  ${c.green}✓${c.reset} python ${c.dim}(${python.version})${c.reset}`)
       }
@@ -1067,11 +1112,6 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         }
       }
 
-      // --- git-lfs ---
-      const gitlfs = await ensureDependency('git-lfs', 'git-lfs', platform, !!isTTY)
-      if (gitlfs.available && !gitlfs.wasInstalled && isTTY) {
-        console.log(`  ${c.green}✓${c.reset} git-lfs ${c.dim}(${gitlfs.version})${c.reset}`)
-      }
 
       if (isTTY) {
         console.log()
@@ -1322,20 +1362,23 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       if (isTTY) console.log(`  ${c.green}✓${c.reset} Specifications present`)
     }
 
-    // Initialize Git LFS for this repo
-    if (commandExists('git-lfs') && existsSync(join(DATA_DIR, '.git'))) {
-      const spinner = isTTY ? new Spinner('Initializing Git LFS...') : null
-      spinner?.start()
-
-      if (runArgs('git', ['lfs', 'install'], { cwd: DATA_DIR, timeout: 30000 })) {
-        runArgs('git', ['lfs', 'pull'], { cwd: DATA_DIR, timeout: 120000 })
-        spinner?.succeed('Git LFS initialized')
+    if (isTTY) console.log()
+    // ── Safety hooks ────────────────────────────────────────────────────
+    // `core.hooksPath` was never set by the installer, so every guard in
+    // .datacore/githooks/ — the secret scan, the wrong-weekday check, the
+    // conflict-marker check — existed in the repo and ran on nobody's machine
+    // but the author's. Two of those three caught real, pre-existing defects
+    // while preparing modules for release on 2026-09-21.
+    const hooksDir = join(DATA_DIR, '.datacore', 'githooks')
+    if (existsSync(hooksDir) && existsSync(join(DATA_DIR, '.git'))) {
+      if (runArgs('git', ['config', 'core.hooksPath', '.datacore/githooks'], { cwd: DATA_DIR })) {
+        if (isTTY) console.log(`  ${c.green}✓${c.reset} safety hooks enabled ${c.dim}(core.hooksPath)${c.reset}`)
+        result.configured.push('Git safety hooks')
       } else {
-        spinner?.fail('Git LFS init failed (non-fatal)')
+        result.warnings.push('Could not set core.hooksPath - commit guards are inactive')
       }
     }
 
-    if (isTTY) console.log()
     op.completeStep('clone_repo')
 
     // ═════════════════════════════════════════════════════════════════════
@@ -1599,7 +1642,6 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         ``,
         `# ${profile.name || 'My'}'s Datacore`,
         ``,
-        profile.role ? `Role: ${profile.role}` : '',
         ``,
         `## My Workflow`,
         ``,
@@ -1862,7 +1904,6 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
           `  name: "${profile.name ? `${profile.name}'s Datacore` : 'My Datacore'}"`,
           `  root: "${DATA_DIR}"`,
           `  version: 1.0.0`,
-          profile.role ? `  role: "${profile.role}"` : null,
           `  use_case: ${profile.useCase}`,
           ``,
           `modules:`,

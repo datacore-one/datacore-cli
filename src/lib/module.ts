@@ -1,3 +1,4 @@
+import { runModulePostInstall } from './init'
 /**
  * Module management utilities.
  *
@@ -25,6 +26,8 @@ export interface AvailableModule {
   features: string[]
   /** Core modules are auto-installed as part of the base Datacore experience */
   core: boolean
+  /** Repo is not public: offer it, but never preselect, and say so. */
+  private?: boolean
 }
 
 export const AVAILABLE_MODULES: AvailableModule[] = [
@@ -35,71 +38,71 @@ export const AVAILABLE_MODULES: AvailableModule[] = [
     repo: 'https://github.com/datacore-one/datacore-nightshift',
     features: ['Queues :AI: tasks for background processing', 'Morning briefing with results', 'Multi-persona evaluation'],
     core: true,
+    private: true,
   },
   // ── Optional modules (user selects) ────────────────────────────────
   {
-    name: 'health',
-    description: 'Health and wellness tracking - sleep, exercise, habits',
-    repo: 'https://github.com/datacore-one/datacore-health',
-    features: ['Daily check-ins', 'Habit tracking and streaks', 'Health reports and correlations'],
-    core: false,
-  },
-  {
-    name: 'crm',
-    description: 'Network intelligence and contact management',
-    repo: 'https://github.com/datacore-one/datacore-crm',
-    features: ['Contact profiles and interaction history', 'Relationship tracking', 'Industry landscape mapping'],
-    core: false,
-  },
-  {
-    name: 'meetings',
-    description: 'Meeting lifecycle automation',
-    repo: 'https://github.com/datacore-one/datacore-meetings',
-    features: ['Pre-meeting briefs', 'Transcript processing', 'Action item extraction'],
-    core: false,
-  },
-  {
-    name: 'mail',
-    description: 'Email integration and processing',
-    repo: 'https://github.com/datacore-one/datacore-mail',
-    features: ['Gmail adapter', 'AI classification and routing', 'Automated processing'],
-    core: false,
-  },
-  {
     name: 'news',
-    description: 'Automated news aggregation with AI-scored relevance',
+    description: 'On-demand news aggregation with AI relevance scoring',
     repo: 'https://github.com/datacore-one/datacore-news',
     features: ['Multi-source aggregation', 'AI relevance scoring', 'Tiered processing'],
     core: false,
   },
   {
     name: 'slides',
-    description: 'Presentation generation via Gamma.app',
+    description: 'Presentation generation and slide indexing',
     repo: 'https://github.com/datacore-one/datacore-slides',
-    features: ['Presentations via Gamma.app', 'AI-powered backgrounds', 'Template support'],
+    features: ['Generate decks from content', 'Index slides for reuse', 'Template-driven output'],
     core: false,
   },
   {
-    name: 'trading',
-    description: 'Position management and trading workflows',
-    repo: 'https://github.com/datacore-one/datacore-trading',
-    features: ['Position tracking', 'Performance analytics', 'Risk management'],
+    name: 'comms',
+    description: 'Communications — brand, content, scheduling, engagement, landing pages',
+    repo: 'https://github.com/datacore-one/datacore-comms',
+    features: ['Brand positioning and voice', 'Content calendars', 'Engagement pipeline'],
+    core: false,
+  },
+  {
+    name: 'crm',
+    description: 'Network intelligence — contacts, relationships, industry landscape',
+    repo: 'https://github.com/datacore-one/datacore-crm',
+    features: ['Track people, companies, projects', 'Relationship scoring', 'Dormant-contact surfacing'],
+    core: false,
+  },
+  {
+    name: 'meetings',
+    description: 'Meeting lifecycle — standups, prep, transcription, routing',
+    repo: 'https://github.com/datacore-one/datacore-meetings',
+    features: ['Standup generation', 'Agenda prep from issues and calendar', 'Transcript processing'],
+    core: false,
+  },
+  {
+    name: 'mail',
+    description: 'Email integration — AI classification and GTD task creation',
+    repo: 'https://github.com/datacore-one/datacore-mail',
+    features: ['Multi-account inbox processing', 'ACTIONABLE/INFORMATIONAL/IGNORE triage', 'Invoice extraction'],
+    core: false,
+  },
+  {
+    name: 'research',
+    description: 'Automated research pipeline — sources, synthesis, podcasts',
+    repo: 'https://github.com/datacore-one/datacore-research',
+    features: ['Source discovery and extraction', 'Synthesised reports', 'NotebookLM podcasts'],
     core: false,
   },
   {
     name: 'telegram',
-    description: 'Mobile access to Claude Code via Telegram',
+    description: 'Telegram bot — run Datacore sessions from your phone',
     repo: 'https://github.com/datacore-one/datacore-telegram',
-    features: ['Message relay', 'Command execution', 'File sharing'],
+    features: ['Per-chat persistent session', 'Full tool access', 'Mobile capture'],
     core: false,
+    private: true,
   },
-  {
-    name: 'campaigns',
-    description: 'Landing pages, deployment, and A/B testing',
-    repo: 'https://github.com/datacore-one/datacore-campaigns',
-    features: ['Landing page generation', 'PostHog analytics', 'A/B testing'],
-    core: false,
-  },
+  // Retired 2026-09-21:
+  //   health   — superseded by the Practice
+  //   trading  — superseded by Meridian
+  //   campaigns — absorbed into comms v2.0.0
+  // Removing them from the catalog rather than leaving them to fail on clone.
 ]
 
 /**
@@ -291,6 +294,19 @@ export function installModule(source: string): ModuleInfo {
     // Cleanup on failure
     rmSync(modulePath, { recursive: true, force: true })
     throw new Error('Invalid module: missing module.yaml')
+  }
+
+  // Install the module's own dependencies. `runModulePostInstall` used to have a
+  // single caller inside `init`, so a module added AFTER setup arrived without
+  // its requirements.txt and died on first import — reported from the first
+  // external install, where `venture_init.py` failed on `import pydantic`
+  // immediately after a clean `module install`.
+  const post = runModulePostInstall(modulePath)
+  if (post.ran && !post.success) {
+    // Say so. The symptom otherwise appears much later and somewhere else.
+    console.warn(`  warning: ${info.name} installed, but its ${post.type} dependencies failed.`)
+    console.warn(`  Retry with: cd ${modulePath} && ${post.type === 'pip'
+      ? 'python3 -m pip install -r requirements.txt' : 'npm install'}`)
   }
 
   return info

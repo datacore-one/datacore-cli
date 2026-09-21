@@ -73,10 +73,12 @@ export function getSpace(nameOrNumber: string | number): SpaceInfo | null {
  */
 export function getNextSpaceNumber(): number {
   const spaces = listSpaces()
-  if (spaces.length === 0) return 0
-
-  const maxNumber = Math.max(...spaces.map((s) => s.number))
-  return maxNumber + 1
+  // 0 is RESERVED for the personal space. Returning it for the first team space
+  // — which is what happened on an install whose personal space did not yet
+  // exist — produces `0-<team>` colliding with `0-personal`, and breaks every
+  // convention that reads the 0 prefix as "this is the personal space".
+  if (spaces.length === 0) return 1
+  return Math.max(1, Math.max(...spaces.map((s) => s.number)) + 1)
 }
 
 /**
@@ -109,6 +111,8 @@ export function createSpace(name: string, type: 'personal' | 'team' = 'team'): S
     '.datacore/env',
     'org',                    // GTD org files (inbox, next_actions, nightshift, habits)
     '0-inbox',                // File inbox (unprocessed files)
+    '1-active',               // Live efforts — the personal analogue of 1-tracks
+    '2-projects',             // Project working copies (gitignored)
     'notes',                  // Personal knowledge base (Obsidian)
     'notes/journals',         // Daily personal journals
     'notes/pages',            // Wiki pages

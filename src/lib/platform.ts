@@ -45,13 +45,6 @@ export function getInstallCommand(pkg: string, platform: Platform): string | nul
       windows: 'winget install Git.Git',
       unknown: null,
     },
-    'git-lfs': {
-      macos: 'brew install git-lfs && git lfs install',
-      linux: 'sudo apt-get install git-lfs && git lfs install',
-      wsl: 'sudo apt-get install git-lfs && git lfs install',
-      windows: 'winget install GitHub.GitLFS',
-      unknown: null,
-    },
     node: {
       macos: 'brew install node',
       linux: 'curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs',

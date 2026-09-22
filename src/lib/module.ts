@@ -87,7 +87,7 @@ export const AVAILABLE_MODULES: AvailableModule[] = [
     name: 'research',
     description: 'Automated research pipeline — sources, synthesis, podcasts',
     repo: 'https://github.com/datacore-one/datacore-research',
-    features: ['Source discovery and extraction', 'Synthesised reports', 'NotebookLM podcasts'],
+    features: ['Source discovery and extraction', 'Synthesised reports', 'Gemini Notebook audio overviews'],
     core: false,
   },
   {

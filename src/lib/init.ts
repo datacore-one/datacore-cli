@@ -82,6 +82,69 @@ const KNOWN_SPACES: KnownSpace[] = [
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/**
+ * What an agent should ask the user before calling `init --answers`.
+ *
+ * Published by `datacore init --print-questions` so the agent does not hardcode
+ * the wizard's questions and the two cannot drift apart. Each entry says what to
+ * ask, what shape the answer takes, and — the part that matters — what happens
+ * if it is left out, so an agent can decide whether a question is worth asking
+ * this particular person.
+ */
+export const INIT_QUESTIONS = {
+  version: 1,
+  usage: 'Ask these in natural language, write the answers as JSON, then run: datacore init --answers <file>',
+  questions: [
+    {
+      key: 'name', type: 'string', required: false,
+      ask: 'What name should Datacore use for you?',
+      default: 'from git config user.name',
+    },
+    {
+      key: 'email', type: 'string', required: false,
+      ask: 'Which email address?',
+      default: 'from git config user.email',
+    },
+    {
+      key: 'useCase', type: 'enum', required: false,
+      values: ['personal', 'team', 'both'],
+      ask: 'Is this for personal use, team use, or both?',
+      default: 'both',
+    },
+    {
+      key: 'modules', type: 'string[]', required: false,
+      ask: 'Which modules do you want? Run `datacore module list` for what is available.',
+      default: 'every public module in the catalog',
+      note: 'Private modules are never installed unless named explicitly — they cannot be cloned without org access and produce one error line each.',
+    },
+    {
+      key: 'cosName', type: 'string', required: false,
+      ask: 'What should your Chief of Staff be called?',
+      default: 'Winston',
+      note: 'Worth asking. Taking this default silently is the specific thing the non-TTY guard exists to prevent.',
+    },
+    {
+      key: 'cosPersonality', type: 'string', required: false,
+      ask: 'Anything about how it should talk to you?',
+      default: 'none',
+    },
+    {
+      key: 'spaces', type: 'string[]', required: false,
+      ask: 'Any team spaces to create now? (you can add them later)',
+      default: 'none beyond 0-personal',
+    },
+  ],
+  example: {
+    name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    useCase: 'both',
+    modules: ['news', 'research', 'meetings'],
+    cosName: 'Babbage',
+    cosPersonality: 'Brief. Lead with the decision.',
+    spaces: [],
+  },
+} as const
+
 export interface InitOptions {
   /** Skip interactive prompts, use defaults */
   nonInteractive?: boolean
@@ -93,6 +156,35 @@ export interface InitOptions {
   verbose?: boolean
   /** Force re-initialization (init git in non-empty dirs, re-run all steps) */
   force?: boolean
+  /**
+   * Answers gathered elsewhere — by an agent asking the user in natural
+   * language — instead of by this wizard's prompts.
+   *
+   * There were only two modes before this, and both are wrong for an agent
+   * driving the install. The TTY wizard cannot be typed into by a program, and
+   * `--yes` takes every default in silence: the user is never asked their name,
+   * their modules, or what to call their Chief of Staff, and non-interactive
+   * mode additionally tries to install EVERY module including the private ones,
+   * which fail to clone for anyone outside the org.
+   *
+   * With answers supplied, the run is non-interactive but nothing is defaulted
+   * silently — every value was chosen by a human, just not at a prompt.
+   */
+  answers?: InitAnswers
+}
+
+/** What the wizard would have asked. See `datacore init --print-questions`. */
+export interface InitAnswers {
+  name?: string
+  email?: string
+  useCase?: 'personal' | 'team' | 'both'
+  /** Module names to install. Omit for "every public module in the catalog". */
+  modules?: string[]
+  /** What the Chief of Staff is called. */
+  cosName?: string
+  cosPersonality?: string
+  /** Team spaces to create, by name. */
+  spaces?: string[]
 }
 
 export interface InitResult {
@@ -620,7 +712,8 @@ const COS_TONES: { label: string; line: string }[] = [
  * Written to $DATACORE_ROOT/.datacore/personas/, which both persona loaders
  * prefer over the bundled set, so the customisation survives upgrades.
  */
-async function configureChiefOfStaff(isTTY: boolean | undefined, result: InitResult): Promise<void> {
+async function configureChiefOfStaff(isTTY: boolean | undefined, result: InitResult,
+                                     answers?: InitAnswers): Promise<void> {
   const personasDir = join(DATACORE_DIR, 'personas')
   const target = join(personasDir, 'winston.md')
 
@@ -628,7 +721,13 @@ async function configureChiefOfStaff(isTTY: boolean | undefined, result: InitRes
   let tone = COS_TONES[0]!.line
   let extra = ''
 
-  if (isTTY) {
+  // A name the user chose, gathered by an agent rather than at a prompt. The
+  // default being taken silently is the specific thing the non-TTY guard
+  // exists to prevent, so honouring an explicit answer here is the point.
+  if (answers?.cosName || answers?.cosPersonality) {
+    if (answers.cosName) name = answers.cosName.trim() || 'Winston'
+    if (answers.cosPersonality) extra = answers.cosPersonality.trim()
+  } else if (isTTY) {
     name = (await prompt('  What should your Chief of Staff be called', 'Winston')).trim() || 'Winston'
     const idx = await choose('  Tone', COS_TONES.map(t => t.label), 0)
     tone = (COS_TONES[idx] ?? COS_TONES[0]!).line
@@ -850,9 +949,11 @@ export function isInitialized(): boolean {
  */
 export async function initDatacore(options: InitOptions = {}): Promise<InitResult> {
   const { nonInteractive = false, skipChecks = false, stream = false, verbose = false, force = false } = options
+  const answers = options.answers
   const isTTY = stream && process.stdout.isTTY
 
-  const interactive = isTTY && !nonInteractive
+  // Answers supplied => deliberately non-interactive, and legitimately so.
+  const interactive = isTTY && !nonInteractive && !answers
   const platform = detectPlatform()
 
   const result: InitResult = {
@@ -872,12 +973,13 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
   // precisely what an agent does when it pipes output, so the quiet path was
   // the likeliest one in practice. Taking the defaults is fine; doing it
   // without anyone choosing to is not, so it now has to be asked for.
-  if (!isTTY && !options.nonInteractive) {
+  if (!isTTY && !options.nonInteractive && !answers) {
     result.errors.push(
       'Not a terminal, so every prompt would be skipped and all defaults taken ' +
       'silently (including naming your Chief of Staff "Winston"). Re-run in a ' +
-      'terminal you can type into, or pass --yes to accept the defaults ' +
-      'deliberately.',
+      'terminal you can type into, pass --yes to accept the defaults ' +
+      'deliberately, or supply --answers (see --print-questions) if an agent ' +
+      'gathered them from you already.',
     )
     return result
   }
@@ -934,10 +1036,12 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       console.log(`  ${c.green}✓${c.reset} Welcome, ${c.bold}${profile.name || 'friend'}${c.reset}!`)
       console.log()
     } else {
-      // Non-interactive: fill from git config
+      // Non-interactive: answers first, then git config. An answer the user
+      // actually gave beats a value inferred from their git setup.
       const gitConfig = isGitConfigured()
-      if (gitConfig.name) profile.name = gitConfig.name
-      if (gitConfig.email) profile.email = gitConfig.email
+      profile.name = answers?.name || gitConfig.name || profile.name
+      profile.email = answers?.email || gitConfig.email || profile.email
+      if (answers?.useCase) profile.useCase = answers.useCase
     }
 
     op.completeStep('about_you')
@@ -1745,9 +1849,20 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       }
 
       modulesToInstall = allModules.filter((_, i) => selected.has(i))
+    } else if (answers?.modules) {
+      // Exactly what was asked for, by name. An unknown name is a typo worth
+      // reporting, not a module to silently skip.
+      const wanted = new Set(answers.modules)
+      modulesToInstall = allModules.filter((m) => wanted.has(m.name))
+      const unknown = [...wanted].filter((n) => !allModules.some((m) => m.name === n))
+      if (unknown.length) {
+        result.warnings.push(`Unknown module(s) requested: ${unknown.join(', ')}`)
+      }
     } else {
-      // Non-interactive: install all modules
-      modulesToInstall = [...allModules]
+      // Non-interactive with no list: every module the user can actually clone.
+      // Installing the private ones produced a red error line per module on
+      // every external install, for repos they were never going to reach.
+      modulesToInstall = allModules.filter((m) => !m.private)
     }
 
     // Install selected modules
@@ -1806,7 +1921,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       console.log()
     }
 
-    await configureChiefOfStaff(isTTY, result)
+    await configureChiefOfStaff(isTTY, result, answers)
     op.completeStep('chief_of_staff')
 
     // ═════════════════════════════════════════════════════════════════════

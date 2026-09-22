@@ -37,7 +37,10 @@ export const AVAILABLE_MODULES: AvailableModule[] = [
     description: 'Autonomous AI task execution (local mode)',
     repo: 'https://github.com/datacore-one/datacore-nightshift',
     features: ['Queues :AI: tasks for background processing', 'Morning briefing with results', 'Multi-persona evaluation'],
-    core: true,
+    // NOT core while the repo is private. `core: true` means "install this on
+    // every machine", and the repo cannot be cloned without org access — so
+    // every external install failed on it before reaching anything else.
+    core: false,
     private: true,
   },
   // ── Optional modules (user selects) ────────────────────────────────

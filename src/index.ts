@@ -9,11 +9,12 @@ import { parseArgs, suggestCommand } from './routing'
 import { showHelp, showResourceHelp, showActionHelp } from './help'
 import { detectFormat, output, success, info, warn, error as errorLog } from './format'
 import { CLIError } from './errors'
+import { readFileSync } from 'fs'
 import { runDoctor } from './lib/dependency'
 import { loadConfig, getConfigValue, setConfigValue, getAllConfig } from './config'
 import { listSpaces, createSpace } from './lib/space'
 import { pullAll, pushAll, statusAll } from './lib/sync'
-import { initDatacore, isInitialized } from './lib/init'
+import { initDatacore, isInitialized, InitAnswers, INIT_QUESTIONS } from './lib/init'
 import { updateDatacore } from './lib/upgrade'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
@@ -37,6 +38,31 @@ async function handleMeta(
       break
 
     case 'init': {
+      // `--print-questions` emits the contract an agent needs in order to ask
+      // the user itself, so nothing about the wizard has to be hardcoded on the
+      // agent side and the two cannot drift.
+      if (flags['print-questions'] === true) {
+        output(INIT_QUESTIONS, format === 'human' ? 'json' : format)
+        break
+      }
+
+      // `--answers` is the third mode. Without it an agent has only the TTY
+      // wizard it cannot type into, or `--yes`, which takes every default in
+      // silence — including naming the user's Chief of Staff for them.
+      let answers: InitAnswers | undefined
+      const answersPath = typeof flags.answers === 'string' ? flags.answers : undefined
+      if (answersPath) {
+        try {
+          answers = JSON.parse(readFileSync(answersPath, 'utf-8')) as InitAnswers
+        } catch (e) {
+          // A malformed answers file must not fall through into a defaults run:
+          // that is exactly the silent-defaults outcome this mode exists to stop.
+          errorLog(`Could not read answers file ${answersPath}: ${(e as Error).message}`)
+          process.exitCode = 1
+          break
+        }
+      }
+
       if (isInitialized() && !flags.force) {
         if (format === 'json') {
           output({ success: true, message: 'Datacore already initialized', hint: 'Use datacore update or --force to re-initialize' }, format)
@@ -50,6 +76,7 @@ async function handleMeta(
 
       const result = await initDatacore({
         nonInteractive: flags.yes === true,
+        answers,
         skipChecks: flags['skip-checks'] === true,
         stream: format === 'human',
         verbose: flags.verbose === true,

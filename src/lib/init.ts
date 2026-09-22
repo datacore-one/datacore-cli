@@ -33,7 +33,13 @@ import { spawnBackground, type BackgroundJob } from './background'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DATA_DIR = join(process.env.HOME || '', 'Data')
+// Honour DATACORE_ROOT, as paths.ts:dataDir() already did and this file did not.
+// The divergence made the installer untestable: a run against a temp root
+// silently resolved to the real ~/Data, found it initialised, and returned
+// success having created nothing — so every install bug had to be found by a
+// human on a clean laptop. Read at module load, which is correct for an env var
+// the caller sets before starting the process (see the init smoke test).
+const DATA_DIR = process.env.DATACORE_ROOT || join(process.env.HOME || '', 'Data')
 const DATACORE_DIR = join(DATA_DIR, '.datacore')
 const UPSTREAM_REPO = 'datacore-one/datacore'
 const TOTAL_STEPS = 10

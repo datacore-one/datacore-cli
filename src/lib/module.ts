@@ -87,13 +87,6 @@ export const AVAILABLE_MODULES: AvailableModule[] = [
     core: false,
   },
   {
-    name: 'research',
-    description: 'Automated research pipeline — sources, synthesis, podcasts',
-    repo: 'https://github.com/datacore-one/datacore-research',
-    features: ['Source discovery and extraction', 'Synthesised reports', 'Gemini Notebook audio overviews'],
-    core: false,
-  },
-  {
     name: 'telegram',
     description: 'Telegram bot — run Datacore sessions from your phone',
     repo: 'https://github.com/datacore-one/datacore-telegram',
@@ -101,6 +94,15 @@ export const AVAILABLE_MODULES: AvailableModule[] = [
     core: false,
     private: true,
   },
+  // NOT LISTED, deliberately:
+  //   research, gtd, github, goals, decisions, outbox, analytics, tab-capture,
+  //   voice-terminal, whatsapp — these are CORE. They are tracked inside the
+  //   main datacore repo and arrive with the clone, so listing them here would
+  //   clone a second copy over the one already present. The test is the
+  //   `repository:` field in module.yaml: a module that declares one is an
+  //   independent clone, one that does not is core (see the datacore
+  //   .gitignore, which states the same rule).
+  //
   // Retired 2026-09-21:
   //   health   — superseded by the Practice
   //   trading  — superseded by Meridian

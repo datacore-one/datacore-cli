@@ -87,6 +87,14 @@ export const AVAILABLE_MODULES: AvailableModule[] = [
     core: false,
   },
   {
+    name: 'ventures',
+    description: 'Autonomous venture framework — roles, cadences, budgets, hypotheses',
+    repo: 'https://github.com/datacore-one/datacore-ventures',
+    features: ['Cadence engine with overdue tracking', 'Budget ledger per venture', 'Hypothesis board'],
+    core: false,
+    private: true,
+  },
+  {
     name: 'telegram',
     description: 'Telegram bot — run Datacore sessions from your phone',
     repo: 'https://github.com/datacore-one/datacore-telegram',

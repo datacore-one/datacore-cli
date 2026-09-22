@@ -2386,7 +2386,41 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       )
     }
 
-    result.success = unresolvable.length === 0
+    // ── Completion gate ────────────────────────────────────────────────
+    // An install that ends with ~/Data a stub, no ~/.plur and nothing
+    // registered used to report success-shaped state and say nothing. Assert
+    // the things that must be true, and fail loudly naming each one that is
+    // not — a first-run wizard that can end in an unreported half-state is
+    // worse than one that fails, because the user then uses a system that is
+    // quietly not there.
+    const completion: { label: string; ok: boolean; fix: string }[] = [
+      { label: '~/Data created', ok: existsSync(DATA_DIR),
+        fix: 'datacore init --force' },
+      { label: 'personal space', ok: existsSync(join(DATA_DIR, '0-personal')),
+        fix: 'datacore init --force' },
+      { label: 'GTD org files', ok: existsSync(join(DATA_DIR, '0-personal', 'org')),
+        fix: 'datacore init --force' },
+      { label: '.datacore present', ok: existsSync(DATACORE_DIR),
+        fix: 'datacore init --force' },
+      { label: 'git initialised', ok: existsSync(join(DATA_DIR, '.git')),
+        fix: `git -C ${DATA_DIR} init` },
+    ]
+    const incomplete = completion.filter((c) => !c.ok)
+    for (const c of incomplete) {
+      result.errors.push(`Install incomplete — ${c.label} is missing. Fix: ${c.fix}`)
+    }
+    if (isTTY) {
+      console.log()
+      console.log(`  ${c.bold}Verifying your installation${c.reset}`)
+      for (const chk of completion) {
+        console.log(`    ${chk.ok ? c.green + '✓' : c.red + '✗'}${c.reset} ${chk.label}`)
+      }
+      if (incomplete.length) {
+        console.log(`    ${c.dim}run \`datacore doctor\` for details${c.reset}`)
+      }
+    }
+
+    result.success = unresolvable.length === 0 && incomplete.length === 0
     // Append, never assign: steps pushed by earlier phases (the Chief of
     // Staff persona path, for one) were being discarded by a bare assignment.
     result.nextSteps.push(

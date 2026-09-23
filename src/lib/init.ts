@@ -108,8 +108,9 @@ export const INIT_QUESTIONS = {
     },
     {
       key: 'email', type: 'string', required: false,
-      ask: 'Which email address?',
-      default: 'from git config user.email',
+      ask: 'Which email should sign your git commits? Use one on your GitHub account, or GitHub will not link the commits to you.',
+      default: 'git config user.email, else the GitHub noreply address of the signed-in gh account',
+      note: 'This becomes `git config --global user.email` and nothing else. An address GitHub does not know produces commits attributed to nobody, which is invisible until someone reads a contribution graph.',
     },
     {
       key: 'useCase', type: 'enum', required: false,
@@ -372,6 +373,35 @@ function isGitConfigured(): { name?: string; email?: string; configured: boolean
   const name = runArgsOutput('git', ['config', '--global', 'user.name'])
   const email = runArgsOutput('git', ['config', '--global', 'user.email'])
   return { name: name || undefined, email: email || undefined, configured: !!(name && email) }
+}
+
+/**
+ * The GitHub account's commit identity, if `gh` is already authenticated.
+ *
+ * The email this wizard collects does exactly one thing: it becomes
+ * `git config --global user.email`. That is the address GitHub matches commits
+ * against, so an address not on the user's account produces commits GitHub
+ * shows as an anonymous grey avatar forever. Asking for "your email" invites
+ * precisely that answer, and the mistake is invisible until someone looks at a
+ * contribution graph months later.
+ *
+ * We default to the account's `noreply` address rather than a real one. It
+ * always attributes correctly, it needs no scope beyond what `gh auth login`
+ * already grants (`/user` is public; `/user/emails` would require asking for
+ * `user`), and it keeps a private address out of commit history that may well
+ * become public. Anyone who wants their real address types it over the top.
+ */
+function githubIdentity(): { login: string; noreply: string } | null {
+  if (!commandExists('gh')) return null
+  const raw = runArgsOutput('gh', ['api', 'user', '--jq', '{login: .login, id: .id}'], { timeout: 10000 })
+  if (!raw) return null
+  try {
+    const { login, id } = JSON.parse(raw) as { login?: string; id?: number }
+    if (!login || typeof id !== 'number') return null
+    return { login, noreply: `${id}+${login}@users.noreply.github.com` }
+  } catch {
+    return null
+  }
 }
 
 // ─── Helpers: Dependencies ────────────────────────────────────────────────────
@@ -1020,12 +1050,29 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       console.log(`  ${c.dim}AI context layer, and tailors the experience to your needs.${c.reset}`)
       console.log()
 
-      // Pre-fill from git config if available
+      // Pre-fill from git config if available, then from the GitHub account.
       const gitConfig = isGitConfigured()
+      const gh = githubIdentity()
       if (gitConfig.name) profile.name = gitConfig.name
       if (gitConfig.email) profile.email = gitConfig.email
+      if (!profile.email && gh) profile.email = gh.noreply
 
       profile.name = await prompt(`  Your name`, profile.name || undefined)
+
+      // Say what the address is FOR. It becomes `git config user.email`, which
+      // is how GitHub decides whose commits these are -- so the right answer is
+      // an address on their GitHub account, not whichever one came to mind.
+      if (gh) {
+        console.log()
+        console.log(`  ${c.dim}Your email signs your git commits. GitHub links them to${c.reset}`)
+        console.log(`  ${c.dim}your account only if the address is one it knows.${c.reset}`)
+        console.log(`  ${c.dim}Signed in as ${c.reset}${gh.login}${c.dim} — the default below is that${c.reset}`)
+        console.log(`  ${c.dim}account's private noreply address, which always matches.${c.reset}`)
+      } else {
+        console.log()
+        console.log(`  ${c.dim}Your email signs your git commits. Use the address on your${c.reset}`)
+        console.log(`  ${c.dim}GitHub account, or commits will not be linked to you.${c.reset}`)
+      }
       profile.email = await prompt(`  Your email`, profile.email || undefined)
 
       console.log()
@@ -1046,7 +1093,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       // actually gave beats a value inferred from their git setup.
       const gitConfig = isGitConfigured()
       profile.name = answers?.name || gitConfig.name || profile.name
-      profile.email = answers?.email || gitConfig.email || profile.email
+      profile.email = answers?.email || gitConfig.email || githubIdentity()?.noreply || profile.email
       if (answers?.useCase) profile.useCase = answers.useCase
     }
 

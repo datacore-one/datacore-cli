@@ -87,6 +87,13 @@ export const AVAILABLE_MODULES: AvailableModule[] = [
     core: false,
   },
   {
+    name: 'gigs',
+    description: 'Concert radar — artists from your Spotify library playing near you',
+    repo: 'https://github.com/datacore-one/datacore-gigs',
+    features: ['Matches your liked artists against regional listings', 'Surfaces shows in the morning briefing', 'Nudges again when tickets are worth buying'],
+    core: false,
+  },
+  {
     name: 'ventures',
     description: 'Autonomous venture framework — roles, cadences, budgets, hypotheses',
     repo: 'https://github.com/datacore-one/datacore-ventures',

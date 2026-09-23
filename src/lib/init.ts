@@ -395,16 +395,38 @@ function cosPersonaName(): string {
   }
 }
 
-/** Is this MCP server actually in Claude Code's config? */
+/**
+ * Is this MCP server actually registered?
+ *
+ * `~/Data/.mcp.json` is the file `configureMcpForCode` writes and the file
+ * install.txt tells agents to check. This read `~/.claude.json`, which has no
+ * `mcpServers` key at all -- so it returned false on a correct install, every
+ * time. The completion line said "Memory: not connected" and the first-run
+ * marker carried `memoryConnected: false`, which made the assistant open its
+ * very first sentence to a new user by announcing that nothing they say will
+ * be remembered. A check that is wrong in the alarming direction is worse than
+ * no check: it teaches people to distrust a working system.
+ *
+ * Claude Desktop's config is accepted too -- a user who wired only that has a
+ * working memory server, whatever the Code config says.
+ */
 function mcpConfigured(name: string): boolean {
-  try {
-    const cfgPath = join(process.env.HOME || '', '.claude.json')
-    if (!existsSync(cfgPath)) return false
-    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as { mcpServers?: Record<string, unknown> }
-    return !!cfg.mcpServers?.[name]
-  } catch {
-    return false
+  const home = process.env.HOME || ''
+  const candidates = [
+    join(DATA_DIR, '.mcp.json'),
+    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+    join(home, '.config', 'Claude', 'claude_desktop_config.json'),
+  ]
+  for (const cfgPath of candidates) {
+    try {
+      if (!existsSync(cfgPath)) continue
+      const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as { mcpServers?: Record<string, unknown> }
+      if (cfg.mcpServers?.[name]) return true
+    } catch {
+      // A malformed config is not proof of absence; try the next one.
+    }
   }
+  return false
 }
 
 /** Is core.hooksPath pointed at the repo's own hooks? */

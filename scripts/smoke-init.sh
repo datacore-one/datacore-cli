@@ -84,6 +84,12 @@ check "  ...names the spaces"     "grep -q '0-personal' '$ROOT/.datacore/state/f
 check "  ...uses the chosen name" "grep -q '\"cosName\": \"Babbage\"' '$ROOT/.datacore/state/first-run.json'"
 # .datacore/modules/state/ has no manifest and is not a module.
 check "  ...counts real modules"  "! grep -q '\"state\"' '$ROOT/.datacore/state/first-run.json'"
+# The marker must agree with .mcp.json, which is the file the installer writes
+# and the file install.txt tells agents to check. Reading ~/.claude.json instead
+# made every correct install report "Memory: not connected", so the assistant
+# opened its first sentence to a new user by announcing nothing would be
+# remembered.
+check "  ...agrees with .mcp.json" "python3 -c \"import json;m=json.load(open('$ROOT/.datacore/state/first-run.json'));c=json.load(open('$ROOT/.mcp.json'));import sys;sys.exit(0 if m['memoryConnected']==('plur' in c.get('mcpServers',{})) else 1)\""
 check "greeting emitted once"     "DATACORE_ROOT='$ROOT' python3 '$ROOT/.datacore/lib/first_run.py' 2>/dev/null | grep -q 'first run'"
 check "  ...and not twice"        "DATACORE_ROOT='$ROOT' python3 '$ROOT/.datacore/lib/first_run.py' 2>/dev/null | grep -q 'no pending first run'"
 

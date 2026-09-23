@@ -14,13 +14,22 @@ import { execFileSync } from 'child_process'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { updateModules, listModules } from './module'
+import { dataDir } from './paths'
 import { createSnapshot, saveSnapshot } from './snapshot'
 import { pullAll } from './sync'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DATA_DIR = join(process.env.HOME || '', 'Data')
-const DATACORE_DIR = join(DATA_DIR, '.datacore')
+// Resolved PER CALL, not frozen at import -- the same reason snapshot.ts says
+// so. This file hardcoded `~/Data` while paths.ts:dataDir() already honoured
+// DATACORE_ROOT, which is the bug init.ts had and had fixed. The consequence
+// here was quieter and worse: `configureMcpForCode` writes `<root>/.mcp.json`,
+// so an install pointed anywhere else wrote its MCP registration into the
+// developer's REAL ~/Data instead of its own -- meaning the install under test
+// had no .mcp.json at all, and the machine running the test had its live
+// config written to by a throwaway install.
+const DATA_DIR = () => dataDir()
+const DATACORE_DIR = () => join(dataDir(), '.datacore')
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -375,7 +384,7 @@ function configureMcpForDesktop(isTTY: boolean, result: UpdateResult): boolean {
 }
 
 function configureMcpForCode(isTTY: boolean, result: UpdateResult): boolean {
-  const mcpJsonPath = join(DATA_DIR, '.mcp.json')
+  const mcpJsonPath = join(DATA_DIR(), '.mcp.json')
   try {
     let config: Record<string, unknown> = {}
     if (existsSync(mcpJsonPath)) {
@@ -410,7 +419,7 @@ function configureMcpForCode(isTTY: boolean, result: UpdateResult): boolean {
  * users don't need to run in bypass mode or approve every tool call.
  */
 function configureCodePermissions(isTTY: boolean, result: UpdateResult): void {
-  const claudeDir = join(DATA_DIR, '.claude')
+  const claudeDir = join(DATA_DIR(), '.claude')
   const settingsPath = join(claudeDir, 'settings.local.json')
 
   try {
@@ -473,7 +482,7 @@ async function upgradeMcpConfig(
   }
 
   // Check if already configured everywhere
-  const mcpJsonPath = join(DATA_DIR, '.mcp.json')
+  const mcpJsonPath = join(DATA_DIR(), '.mcp.json')
   const codeConfigured = existsSync(mcpJsonPath) &&
     !!(JSON.parse(readFileSync(mcpJsonPath, 'utf-8')) as Record<string, unknown>).mcpServers &&
     !!((JSON.parse(readFileSync(mcpJsonPath, 'utf-8')) as Record<string, Record<string, unknown>>).mcpServers?.datacore)
@@ -534,8 +543,8 @@ async function upgradeMcpConfig(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function upgradeDirectories(result: UpdateResult): void {
-  const stateDir = join(DATACORE_DIR, 'state')
-  const envDir = join(DATACORE_DIR, 'env')
+  const stateDir = join(DATACORE_DIR(), 'state')
+  const envDir = join(DATACORE_DIR(), 'env')
 
   let created = false
   if (!existsSync(stateDir)) {
@@ -566,14 +575,14 @@ function upgradeClaudeMd(
     console.log(`${c.bold}Context Files${c.reset}`)
   }
 
-  const contextMerge = join(DATACORE_DIR, 'lib', 'context_merge.py')
+  const contextMerge = join(DATACORE_DIR(), 'lib', 'context_merge.py')
   if (!existsSync(contextMerge)) {
     if (isTTY) console.log(`  ${c.dim}○ context_merge.py not found (skipping)${c.reset}`)
     if (isTTY) console.log()
     return
   }
 
-  if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR, '--all'])) {
+  if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR(), '--all'])) {
     if (isTTY) console.log(`  ${c.green}✓${c.reset} CLAUDE.md rebuilt from layers`)
     result.updated.push('CLAUDE.md rebuilt')
   } else {
@@ -626,7 +635,7 @@ export async function updateDatacore(options: UpdateOptions = {}): Promise<Updat
     alreadyCurrent: [],
   }
 
-  if (!existsSync(DATACORE_DIR)) {
+  if (!existsSync(DATACORE_DIR())) {
     result.errors.push('Datacore not initialized. Run: datacore init')
     return result
   }

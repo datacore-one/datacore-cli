@@ -429,6 +429,55 @@ function mcpConfigured(name: string): boolean {
   return false
 }
 
+/**
+ * Point the shipped Claude Code hooks at THIS installation.
+ *
+ * `.datacore/settings.json` ships with 26 hook commands, every one of them
+ * spelling the path out as `python3 ~/Data/.datacore/lib/...`. That is correct
+ * for the default location and wrong everywhere else: an install created with
+ * `--path` or DATACORE_ROOT gets a settings file whose hooks all reach into
+ * ~/Data, so they either run the WRONG installation's code or silently do
+ * nothing. Session bootstrap, engram injection, the date guard, the wrap-up
+ * gate -- none of them belong to the install that just ran.
+ *
+ * `${CLAUDE_PROJECT_DIR}` would be the elegant fix and is not safe here: it
+ * resolves to where the session started, so a session opened inside a project
+ * folder would resolve it to that folder rather than the installation root.
+ * Rewriting once, at install time, has no such failure mode.
+ *
+ * For a default install this is a literal no-op: the paths already say ~/Data,
+ * nothing changes, and the tracked file stays clean.
+ */
+function localiseHookPaths(isTTY: boolean | undefined, result: InitResult): void {
+  const settingsPath = join(DATACORE_DIR, 'settings.json')
+  if (!existsSync(settingsPath)) return
+
+  const home = process.env.HOME || ''
+  const defaultRoot = join(home, 'Data')
+  if (DATA_DIR === defaultRoot) return  // nothing to rewrite
+
+  try {
+    const before = readFileSync(settingsPath, 'utf-8')
+    // Both spellings appear in the wild: the literal tilde and the expanded
+    // home path. Replace each with this installation's root.
+    const after = before
+      .split('~/Data/').join(`${DATA_DIR}/`)
+      .split(`${defaultRoot}/`).join(`${DATA_DIR}/`)
+    if (after === before) return
+
+    JSON.parse(after)  // never write a settings file that will not parse
+    writeFileSync(settingsPath, after)
+    if (isTTY) {
+      console.log(`  ${c.green}✓${c.reset} hook paths point at ${c.dim}${DATA_DIR}${c.reset}`)
+    }
+    result.configured.push('Claude Code hook paths localised')
+  } catch (err) {
+    result.warnings.push(
+      `Could not point hook paths at ${DATA_DIR}: ${(err as Error).message}. ` +
+      'Hooks may run against ~/Data instead of this installation.')
+  }
+}
+
 /** Is core.hooksPath pointed at the repo's own hooks? */
 function gitHooksConfigured(): boolean {
   return !!runArgsOutput('git', ['-C', DATA_DIR, 'config', 'core.hooksPath'])
@@ -1623,6 +1672,8 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         result.warnings.push('Could not set core.hooksPath - commit guards are inactive')
       }
     }
+
+    localiseHookPaths(isTTY, result)
 
     op.completeStep('clone_repo')
 

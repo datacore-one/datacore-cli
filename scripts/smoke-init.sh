@@ -41,6 +41,12 @@ check "requested module installed" "[ -d '$ROOT/.datacore/modules/news' ]"
 # error line per module on every external install.
 check "no private module attempted" "[ ! -d '$ROOT/.datacore/modules/telegram' ]"
 check "safety hooks configured"    "git -C '$ROOT' config core.hooksPath >/dev/null 2>&1 || true"
+# The shipped settings.json spells out `python3 ~/Data/.datacore/lib/...` in all
+# 26 hook commands. An install anywhere else would run the WRONG installation's
+# hooks, or none: session bootstrap, engram injection, the date guard and the
+# wrap-up gate would all belong to ~/Data rather than to the install that ran.
+check "hook paths point here"      "! grep -q '~/Data/.datacore' '$ROOT/.datacore/settings.json'"
+check "  ...and settings still parse" "python3 -c \"import json;json.load(open('$ROOT/.datacore/settings.json'))\""
 
 # ── spaces are repos, and can be created, joined and audited ────────────────
 # `createSpace` wrote a .gitignore, returned hasGit:false and never ran

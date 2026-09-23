@@ -382,7 +382,14 @@ function cosPersonaName(): string {
     const f = join(DATACORE_DIR, 'personas', 'winston.md')
     if (!existsSync(f)) return 'Winston'
     const head = readFileSync(f, 'utf-8').slice(0, 2000)
-    return head.match(/^#\s+(.+)$/m)?.[1]?.trim().split(/[\u2014,-]/)[0]!.trim() || 'Winston'
+    // The name is `displayName:` in the frontmatter. Reading the first H1
+    // instead found nothing and fell back to the default, so an install whose
+    // owner named their Chief of Staff Babbage was greeted by Winston -- the
+    // single most visible thing about the feature, wrong. The H1 is kept as a
+    // second chance for a hand-written persona that has no frontmatter.
+    return head.match(/^displayName:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '')
+      || head.match(/^#\s+(.+)$/m)?.[1]?.trim().split(/[\u2014,-]/)[0]?.trim()
+      || 'Winston'
   } catch {
     return 'Winston'
   }

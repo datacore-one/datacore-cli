@@ -78,6 +78,12 @@ rm -rf "$BARE" "$JOINROOT"
 echo "→ first run"
 check "first-run marker written"  "[ -f '$ROOT/.datacore/state/first-run.json' ]"
 check "  ...names the spaces"     "grep -q '0-personal' '$ROOT/.datacore/state/first-run.json'"
+# The name the user chose, not the default. It is read from the persona's
+# frontmatter; reading the first H1 instead silently greeted every user as
+# Winston, however they had named their Chief of Staff.
+check "  ...uses the chosen name" "grep -q '\"cosName\": \"Babbage\"' '$ROOT/.datacore/state/first-run.json'"
+# .datacore/modules/state/ has no manifest and is not a module.
+check "  ...counts real modules"  "! grep -q '\"state\"' '$ROOT/.datacore/state/first-run.json'"
 check "greeting emitted once"     "DATACORE_ROOT='$ROOT' python3 '$ROOT/.datacore/lib/first_run.py' 2>/dev/null | grep -q 'first run'"
 check "  ...and not twice"        "DATACORE_ROOT='$ROOT' python3 '$ROOT/.datacore/lib/first_run.py' 2>/dev/null | grep -q 'no pending first run'"
 

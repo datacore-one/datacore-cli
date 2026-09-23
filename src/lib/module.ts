@@ -184,6 +184,14 @@ export function getModuleInfo(modulePath: string): ModuleInfo | null {
   const ymlPath = join(modulePath, 'module.yml')
   const configPath = existsSync(yamlPath) ? yamlPath : existsSync(ymlPath) ? ymlPath : null
 
+  // No manifest, no module. Every directory under .datacore/modules/ used to
+  // count, so `.datacore/modules/state/` -- a state directory holding one
+  // subfolder and no manifest -- was reported as an installed module by
+  // `datacore module list`, by the install summary, and to the assistant in the
+  // first-run greeting ("13 modules installed", one of which does not exist).
+  // The manifest is what defines a module everywhere else in this system.
+  if (!configPath) return null
+
   let version: string | undefined
   let description: string | undefined
 

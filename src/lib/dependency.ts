@@ -201,6 +201,27 @@ function checkMcp(platform: Platform): DependencyCheck {
   }
 }
 
+/**
+ * PLUR, the memory server.
+ *
+ * `datacore doctor` checked datacore-mcp and not this one, while install.txt
+ * tells the user to verify BOTH and llms.txt says an install without PLUR
+ * "forgets every correction between sessions". So the documented verification
+ * step returned a clean bill of health for exactly the install the docs call
+ * broken, and the user would only find out session by session, as nothing they
+ * corrected stuck.
+ */
+function checkPlurMcp(platform: Platform): DependencyCheck {
+  const installed = commandExists('plur-mcp')
+  return {
+    name: 'plur-mcp',
+    required: false,
+    installed,
+    version: installed ? getVersion('plur-mcp', '--version') : undefined,
+    installCommand: installed ? undefined : getInstallCommand('plur-mcp', platform) ?? undefined,
+  }
+}
+
 export function checkCodePermissions(): { enableAll: boolean; mcpAllowed: boolean } {
   const home = process.env.HOME || ''
   const settingsPaths = [
@@ -285,6 +306,7 @@ export function checkDependencies(): DependencyCheck[] {
     checkGh(platform),
     checkClaude(platform),
     checkMcp(platform),
+    checkPlurMcp(platform),
   ]
 }
 

@@ -71,6 +71,16 @@ check "space audit answers"        "DATACORE_ROOT='$ROOT' node '$CLI' space audi
 
 rm -rf "$BARE" "$JOINROOT"
 
+# ── the assistant is told what was just built ──────────────────────────────
+# Without this the first `claude` session after an install opens on a blank
+# prompt, identical to the ten-thousandth one. The hook renames the marker
+# before greeting, so it fires exactly once.
+echo "→ first run"
+check "first-run marker written"  "[ -f '$ROOT/.datacore/state/first-run.json' ]"
+check "  ...names the spaces"     "grep -q '0-personal' '$ROOT/.datacore/state/first-run.json'"
+check "greeting emitted once"     "DATACORE_ROOT='$ROOT' python3 '$ROOT/.datacore/lib/first_run.py' 2>/dev/null | grep -q 'first run'"
+check "  ...and not twice"        "DATACORE_ROOT='$ROOT' python3 '$ROOT/.datacore/lib/first_run.py' 2>/dev/null | grep -q 'no pending first run'"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "smoke: PASS"; else echo "smoke: FAIL"; fi
 exit "$fail"

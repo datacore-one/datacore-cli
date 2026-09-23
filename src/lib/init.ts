@@ -1346,9 +1346,32 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       const forkSpinner = isTTY ? new Spinner('Checking fork...') : null
       forkSpinner?.start()
 
-      const forkExists = runArgs('gh', ['repo', 'view', `${ghUser}/datacore`], { cwd: process.env.HOME, timeout: 30000 })
+      // Does a repo of that name exist, AND is it a fork of ours?
+      //
+      // Only the first half used to be checked, and `gh repo view <user>/datacore`
+      // succeeds for ANY repo with that name. So an unrelated repo called
+      // "datacore" -- or one forked years ago and abandoned -- was adopted as
+      // "the fork" and cloned as the user's whole installation, silently.
+      // Measured 2026-09-23 on this machine: plur9/datacore is not a fork at
+      // all (no parent) and was last pushed 2025-12-02. The install cloned it
+      // and produced a ~10-month-old Datacore -- 9 files under .datacore/lib
+      // instead of several hundred, and no .datacore/settings.json, so not one
+      // Claude Code hook was configured. Everything downstream looked fine.
+      const parent = runArgsOutput('gh',
+        ['repo', 'view', `${ghUser}/datacore`, '--json', 'parent', '-q', '.parent.owner.login + "/" + .parent.name'],
+        { timeout: 30000 })
+      const forkExists = parent === UPSTREAM_REPO
+      const wrongRepoInTheWay = !forkExists
+        && runArgs('gh', ['repo', 'view', `${ghUser}/datacore`], { cwd: process.env.HOME, timeout: 30000 })
 
-      if (!forkExists) {
+      if (wrongRepoInTheWay) {
+        // Do not touch it, do not clone it, and do not pretend it is ours.
+        forkSpinner?.fail(`${ghUser}/datacore exists but is not a fork of ${UPSTREAM_REPO}`)
+        result.warnings.push(
+          `${ghUser}/datacore is not a fork of ${UPSTREAM_REPO} — cloning upstream directly instead. ` +
+          'Rename or delete that repo first if you want your own fork.')
+        ghUser = undefined
+      } else if (!forkExists) {
         forkSpinner?.update('Forking repository...')
         const forked = runArgs('gh', ['repo', 'fork', UPSTREAM_REPO, '--clone=false'], { timeout: 30000 })
         if (forked) {
@@ -2559,6 +2582,31 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     )
 
     await offerDesktopApp(isTTY, result)
+
+    // Hand the facts to the assistant. `datacore init` finishes in a terminal
+    // and says "cd ~/Data && claude" — and that next command used to open on a
+    // blank prompt, identical to the ten-thousandth session. The installer knew
+    // what it had just built and the assistant did not, so the first thing a
+    // new user met was a stranger. session_bootstrap.py spends this marker on
+    // the next session start and renames it first, so it greets exactly once.
+    try {
+      const allSpaces = listSpaces()
+      const stateDir = join(DATACORE_DIR, 'state')
+      mkdirSync(stateDir, { recursive: true })
+      writeFileSync(join(stateDir, 'first-run.json'), JSON.stringify({
+        installedAt: new Date().toISOString(),
+        dataDir: DATA_DIR,
+        userName: profile.name || '',
+        cosName: cosPersonaName(),
+        spaces: allSpaces.map(s => s.name),
+        modules: listModules().map(m => m.name),
+        memoryConnected: mcpConfigured('plur'),
+        hooksArmed: gitHooksConfigured(),
+      }, null, 2))
+    } catch (err) {
+      // A missing greeting is not a failed install.
+      result.warnings.push(`Could not record first-run greeting: ${(err as Error).message}`)
+    }
 
     if (isTTY) {
       // The finish is an animation, but every line of it is something this run

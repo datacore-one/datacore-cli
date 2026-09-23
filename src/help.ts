@@ -164,6 +164,19 @@ Options:
   --path <dir>         Installation directory (default: ~/Data)
   --yes, -y            Use defaults, skip prompts
   --no-claude          Skip Claude Code check
+  --skip-checks        Skip dependency checks
+  --print-questions    Print the setup questions as JSON and exit
+  --answers <file>     Answer the questions from a JSON file
+
+Environment:
+  DATACORE_ROOT              Installation directory (overrides ~/Data)
+  DATACORE_NO_ANIMATION=1    Print the finish plainly, no animation
+                             (also skipped when not a terminal, or in CI)
+
+Agent-driven setup:
+  An agent can read --print-questions, ask them in conversation, and hand
+  the answers back with --answers. That path exists because a person being
+  helped by an assistant should not have to drive a CLI wizard themselves.
 
 Examples:
   # Interactive setup
@@ -173,7 +186,11 @@ Examples:
   datacore init --yes
 
   # Custom location
-  datacore init --path ~/my-data`)
+  datacore init --path ~/my-data
+
+  # Agent asks, then answers on the user's behalf
+  datacore init --print-questions > q.json
+  datacore init --answers answers.json`)
 }
 
 function showDoctorHelp(): void {
@@ -188,10 +205,9 @@ Description:
 
 Checks:
   Required:
-    - git          Version control
-    - git-lfs      Large file support
-    - node >= 18   Node.js runtime
-    - python >= 3.9 Python runtime
+    - git           Version control
+    - node >= 20    Node.js runtime
+    - python >= 3.10 Python runtime
 
   Recommended:
     - claude       Claude Code CLI for AI features

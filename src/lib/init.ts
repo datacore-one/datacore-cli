@@ -28,7 +28,7 @@ import { invokeAgent } from './agent'
 import { FALLBACK_NPM_PREFIX, resolveBinary, unresolvableMcpServers } from './upgrade'
 import { createSnapshot, saveSnapshot } from './snapshot'
 import { startOperation } from '../state'
-import { BANNER, INIT_COMPLETE, Spinner, sleep, section } from './animation'
+import { BANNER, INIT_COMPLETE, Spinner, sleep, section, completionSequence } from './animation'
 import { spawnBackground, type BackgroundJob } from './background'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -367,6 +367,42 @@ function checkGhAuth(): { available: boolean; user?: string } {
     if (userMatch) return { available: true, user: userMatch[1] }
     return { available: false }
   }
+}
+
+/**
+ * The Chief of Staff's name, read back from the persona this install wrote.
+ *
+ * `cosName` lives on InitAnswers, not on the profile, and an interactive run
+ * never puts it there at all -- it is typed at a prompt inside the persona
+ * step. Reading the file is both simpler and truer: it reports the assistant
+ * that exists, including the one a re-run deliberately left alone.
+ */
+function cosPersonaName(): string {
+  try {
+    const f = join(DATACORE_DIR, 'personas', 'winston.md')
+    if (!existsSync(f)) return 'Winston'
+    const head = readFileSync(f, 'utf-8').slice(0, 2000)
+    return head.match(/^#\s+(.+)$/m)?.[1]?.trim().split(/[\u2014,-]/)[0]!.trim() || 'Winston'
+  } catch {
+    return 'Winston'
+  }
+}
+
+/** Is this MCP server actually in Claude Code's config? */
+function mcpConfigured(name: string): boolean {
+  try {
+    const cfgPath = join(process.env.HOME || '', '.claude.json')
+    if (!existsSync(cfgPath)) return false
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as { mcpServers?: Record<string, unknown> }
+    return !!cfg.mcpServers?.[name]
+  } catch {
+    return false
+  }
+}
+
+/** Is core.hooksPath pointed at the repo's own hooks? */
+function gitHooksConfigured(): boolean {
+  return !!runArgsOutput('git', ['-C', DATA_DIR, 'config', 'core.hooksPath'])
 }
 
 function isGitConfigured(): { name?: string; email?: string; configured: boolean } {
@@ -2525,28 +2561,42 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     await offerDesktopApp(isTTY, result)
 
     if (isTTY) {
-      console.log(INIT_COMPLETE)
+      // The finish is an animation, but every line of it is something this run
+      // actually did -- counted here, at the end, from the filesystem. An
+      // installer that spent this release learning to stop reporting success it
+      // had not earned does not get to close with invented progress.
+      const allSpaces = listSpaces()
+      const installedModules = listModules()
+      const cosName = cosPersonaName()
+      await completionSequence([
+        { label: 'Knowledge base', value: DATA_DIR, ok: existsSync(DATA_DIR) },
+        {
+          label: 'Spaces',
+          value: allSpaces.length ? allSpaces.map(s => s.name).join(', ') : 'none',
+          ok: allSpaces.length > 0,
+        },
+        {
+          label: 'Modules',
+          value: installedModules.length
+            ? `${installedModules.length} — ${installedModules.map(m => m.name).join(', ')}`
+            : 'none',
+          ok: installedModules.length > 0,
+        },
+        { label: 'Chief of Staff', value: cosName, ok: true },
+        {
+          label: 'Memory',
+          value: mcpConfigured('plur') ? 'PLUR connected' : 'not connected',
+          ok: mcpConfigured('plur'),
+        },
+        {
+          label: 'Safety hooks',
+          value: gitHooksConfigured() ? 'armed' : 'not configured',
+          ok: gitHooksConfigured(),
+        },
+      ])
       console.log()
       console.log(`  ${c.bold}Setup Complete${profile.name ? `, ${profile.name}` : ''}!${c.reset}`)
       console.log()
-
-      // Spaces
-      const allSpaces = listSpaces()
-      if (allSpaces.length > 0) {
-        console.log(`  ${c.green}Your Datacore:${c.reset}`)
-        for (const s of allSpaces) {
-          const icon = s.type === 'personal' ? '👤' : '👥'
-          console.log(`    ${icon} ${s.name}`)
-        }
-        console.log()
-      }
-
-      // Modules
-      const installedModules = listModules()
-      if (installedModules.length > 0) {
-        console.log(`  ${c.green}Modules:${c.reset} ${installedModules.map(m => m.name).join(', ')}`)
-        console.log()
-      }
 
       // API Keys guidance
       const envDir = join(DATACORE_DIR, 'env')

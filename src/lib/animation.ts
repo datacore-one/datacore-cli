@@ -189,21 +189,66 @@ export async function matrixRain(duration = 500): Promise<void> {
 }
 
 /**
- * Boot sequence effect.
+ * Reveal a block of text a line at a time.
+ *
+ * Nothing is recomputed and nothing is faked -- the text is already final, this
+ * only controls when each line appears.
  */
-export async function bootSequence(): Promise<void> {
-  const lines = [
-    'Initializing neural pathways...',
-    'Loading cognitive frameworks...',
-    'Establishing knowledge graph...',
-    'Calibrating AI agents...',
-    'Synchronizing memory banks...',
-  ]
-
-  for (const line of lines) {
-    process.stdout.write(`${c.dim}> ${line}${c.reset}`)
-    await sleep(100 + Math.random() * 200)
-    process.stdout.write(` ${c.green}OK${c.reset}\n`)
-    await sleep(50)
+export async function revealBox(text: string, perLine = 45): Promise<void> {
+  for (const line of text.split('\n')) {
+    console.log(line)
+    await sleep(perLine)
   }
+}
+
+/**
+ * Report, one line at a time, things that are already true.
+ *
+ * This replaces a version that printed "Initializing neural pathways... OK"
+ * and four more like it, on a fixed timer, regardless of what had happened.
+ * In an installer whose central bug was reporting success while half-built,
+ * five invented OK lines at the finish are not decoration -- they are the same
+ * defect wearing a costume. So the caller passes facts it has measured, and
+ * the animation is only the timing of their arrival.
+ */
+export async function bootSequence(
+  lines: { label: string; value?: string; ok?: boolean }[],
+  perLine = 110,
+): Promise<void> {
+  for (const line of lines) {
+    process.stdout.write(`${c.dim}> ${line.label}${c.reset}`)
+    await sleep(perLine)
+    const mark = line.ok === false ? `${c.yellow}--${c.reset}` : `${c.green}OK${c.reset}`
+    process.stdout.write(` ${line.value ? `${c.reset}${line.value} ` : ''}${mark}\n`)
+    await sleep(perLine / 3)
+  }
+}
+
+/**
+ * The finish: a beat of rain, the box, then what was actually built.
+ *
+ * Skipped whenever output is not a live terminal, and by DATACORE_NO_ANIMATION
+ * or CI. It runs once at the end of an install that a person is watching; the
+ * same install driven by an agent or a script prints the same facts instantly.
+ */
+export async function completionSequence(
+  facts: { label: string; value?: string; ok?: boolean }[],
+  opts: { enabled?: boolean } = {},
+): Promise<void> {
+  const enabled = opts.enabled ?? (
+    !!process.stdout.isTTY
+    && !process.env.DATACORE_NO_ANIMATION
+    && !process.env.CI
+  )
+
+  if (!enabled) {
+    console.log(INIT_COMPLETE)
+    for (const f of facts) console.log(`  ${f.ok === false ? '--' : 'OK'} ${f.label}${f.value ? ` ${f.value}` : ''}`)
+    return
+  }
+
+  await matrixRain(420)
+  await revealBox(INIT_COMPLETE, 40)
+  console.log()
+  await bootSequence(facts)
 }

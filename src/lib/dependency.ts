@@ -101,17 +101,6 @@ function checkGit(platform: Platform): DependencyCheck {
   }
 }
 
-function checkGitLfs(platform: Platform): DependencyCheck {
-  const installed = commandExists('git-lfs')
-  return {
-    name: 'git-lfs',
-    required: false,  // Recommended for large files, not required for basic usage
-    installed,
-    version: installed ? getVersion('git-lfs') : undefined,
-    installCommand: installed ? undefined : getInstallCommand('git-lfs', platform) ?? undefined,
-  }
-}
-
 function checkNode(platform: Platform): DependencyCheck {
   const installed = commandExists('node')
   let version: string | undefined
@@ -285,7 +274,12 @@ export function checkDependencies(): DependencyCheck[] {
 
   return [
     checkGit(platform),
-    checkGitLfs(platform),
+    // git-lfs was removed from the installer on 2026-09-21: nothing here
+    // uses it, and installing it from source cost one external user about
+    // eight silent hours compiling LLVM and Rust. Reporting it as a
+    // recommended dependency was the last place it survived -- and
+    // platform.ts no longer even has an install command to offer, so the
+    // row could only ever say "missing" with no way to act on it.
     checkNode(platform),
     checkPython(platform),
     checkGh(platform),

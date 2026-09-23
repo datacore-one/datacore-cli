@@ -12,9 +12,11 @@ import { CLIError } from './errors'
 import { readFileSync } from 'fs'
 import { runDoctor } from './lib/dependency'
 import { loadConfig, getConfigValue, setConfigValue, getAllConfig } from './config'
-import { listSpaces, createSpace } from './lib/space'
+import { listSpaces, createSpace, initSpaceGit, detectForges, createSpaceRemote, joinSpace, auditSpace }
+  from './lib/space'
+import type { ForgeId } from './lib/space'
 import { pullAll, pushAll, statusAll } from './lib/sync'
-import { initDatacore, isInitialized, InitAnswers, INIT_QUESTIONS } from './lib/init'
+import { initDatacore, isInitialized, InitAnswers, INIT_QUESTIONS, prompt, choose } from './lib/init'
 import { updateDatacore } from './lib/upgrade'
 import { listModules, installModule, updateModules, removeModule } from './lib/module'
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
@@ -383,16 +385,103 @@ async function handleResource(
       switch (action) {
         case 'create': {
           if (!cmdArgs[0]) {
-            throw new CLIError('ERR_INVALID_ARGUMENT', 'Missing space name', 'Usage: datacore space create <name> [--type=team|personal]')
+            throw new CLIError('ERR_INVALID_ARGUMENT', 'Missing space name',
+              'Usage: datacore space create <name> [--type=team|personal] [--remote=github|gitlab|url|none] [--url=<git-url>] [--visibility=private|public]')
           }
           const spaceType = (flags.type as string) === 'personal' ? 'personal' : 'team'
+          const visibility = (flags.visibility as string) === 'public' ? 'public' : 'private'
+          let remote = flags.remote as string | undefined
+          let remoteUrl = flags.url as string | undefined
+          const interactive = process.stdin.isTTY === true && format !== 'json' && flags.yes !== true
+
+          let space
           try {
-            const space = createSpace(cmdArgs[0], spaceType)
+            space = createSpace(cmdArgs[0], spaceType)
+          } catch (err) {
+            throw new CLIError('ERR_OPERATION_FAILED', (err as Error).message)
+          }
+
+          // A space is a git repo. It was not one until now: createSpace wrote a
+          // .gitignore and returned hasGit:false, and nothing ever ran git init.
+          const git = initSpaceGit(space.path)
+          if (!git.ok && format !== 'json') warn(`Space created, but not a git repo yet: ${git.error}`)
+
+          // Ask where it should live, unless the flags already said.
+          if (!remote && !remoteUrl && interactive) {
+            const forges = detectForges()
+            const labels = [
+              ...forges.map(f => f.available
+                ? `${f.label}  ${f.account ? `(signed in as ${f.account})` : ''}`
+                : `${f.label}  — unavailable: ${f.reason}`),
+              'Other host — paste a repo URL (Gitea, Codeberg, Bitbucket, self-hosted)',
+              'Local only — no remote for now',
+            ]
+            console.log()
+            console.log(`Where should ${space.name} live?`)
+            const pick = await choose('  Choose', labels, labels.length - 1)
+            if (pick < forges.length) {
+              const chosen = forges[pick]!
+              if (!chosen.available) {
+                warn(`${chosen.label} is not usable: ${chosen.reason}`)
+                info('Left local. Add the remote later with: datacore space create --remote, or git remote add origin <url>')
+              } else {
+                remote = chosen.id
+              }
+            } else if (pick === forges.length) {
+              remoteUrl = await prompt('  Repo URL (create the empty repo on your host first)')
+            }
+          }
+
+          let remoteResult
+          if (remote === 'url' && !remoteUrl) {
+            throw new CLIError('ERR_INVALID_ARGUMENT', '--remote=url needs --url=<git-url>')
+          }
+          if (remoteUrl) {
+            remoteResult = createSpaceRemote(space.path, space.name, { url: remoteUrl, visibility })
+          } else if (remote === 'github' || remote === 'gitlab') {
+            const forge = detectForges().find(f => f.id === remote)
+            if (forge && !forge.available) {
+              throw new CLIError('ERR_OPERATION_FAILED', `${forge.label} is not usable: ${forge.reason}`)
+            }
+            // The repo takes the space's own name without the number prefix:
+            // the digit orders spaces on THIS machine and means nothing on the
+            // host, where it would also collide the moment someone joins the
+            // space into a different slot.
+            const repoName = space.name.replace(/^\d+-/, '')
+            remoteResult = createSpaceRemote(space.path, repoName, { forge: remote as ForgeId, visibility })
+          }
+
+          if (format === 'json') {
+            output({ ...space, hasGit: git.ok, remote: remoteResult ?? null }, format)
+          } else {
+            success(`Created ${spaceType} space: ${space.name}`)
+            info(`Path: ${space.path}`)
+            if (remoteResult?.ok) {
+              success(`Remote: ${remoteResult.url ?? 'origin set'}${remoteResult.pushed ? ' (pushed)' : ''}`)
+              if (!remoteResult.pushed && remoteResult.error) warn(remoteResult.error)
+            } else if (remoteResult) {
+              warn(`No remote: ${remoteResult.error}`)
+            }
+          }
+          break
+        }
+        case 'join': {
+          if (!cmdArgs[0]) {
+            throw new CLIError('ERR_INVALID_ARGUMENT', 'Missing repo URL',
+              'Usage: datacore space join <git-url> [--name <name>] [--type=team|personal]')
+          }
+          const joinType = (flags.type as string) === 'personal' ? 'personal' : 'team'
+          try {
+            const { space, warnings } = joinSpace(cmdArgs[0], {
+              name: flags.name as string | undefined,
+              type: joinType,
+            })
             if (format === 'json') {
-              output(space, format)
+              output({ ...space, warnings }, format)
             } else {
-              success(`Created ${spaceType} space: ${space.name}`)
+              success(`Joined space: ${space.name}`)
               info(`Path: ${space.path}`)
+              for (const w of warnings) warn(w)
             }
           } catch (err) {
             throw new CLIError('ERR_OPERATION_FAILED', (err as Error).message)
@@ -418,8 +507,30 @@ async function handleResource(
           }
           break
         }
+        case 'audit': {
+          // auditSpace has been exported and called from nowhere. `space join`
+          // now tells people to run this when a clone does not look like a
+          // space, and a command named in a message has to exist.
+          const targets = cmdArgs[0] ? [cmdArgs[0]] : listSpaces().map(s => s.name)
+          if (targets.length === 0) {
+            info('No spaces to audit')
+            break
+          }
+          const results = targets.map(auditSpace)
+          if (format === 'json') {
+            output(cmdArgs[0] ? results[0] : results, format)
+          } else {
+            for (const r of results) {
+              const mark = r.status === 'healthy' ? '✓' : r.status === 'warnings' ? '!' : '✗'
+              console.log(`${mark} ${r.space} — ${r.status}`)
+              for (const i of r.issues) console.log(`    ${i.type}: ${i.path} — ${i.message}`)
+            }
+          }
+          break
+        }
         default:
-          throw new CLIError('ERR_INVALID_ARGUMENT', `Unknown action: space ${action}`)
+          throw new CLIError('ERR_INVALID_ARGUMENT', `Unknown action: space ${action}`,
+            'Actions: create, join, list, audit')
       }
       break
 

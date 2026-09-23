@@ -19,7 +19,7 @@ Setup:
   ingest <path>        Import files during setup
 
 Admin:
-  space                Create and list spaces
+  space                Create, join, list and audit spaces
   module               Install and manage modules
   snapshot             Create/restore installation snapshots
   config               View and modify settings
@@ -338,7 +338,7 @@ Available actions: ${actions.join(', ')}`)
 
 function getResourceDescription(resource: Resource): string {
   const descriptions: Record<Resource, string> = {
-    space: 'Create and list spaces',
+    space: 'Create, join, list and audit spaces',
     module: 'Install and manage modules',
     config: 'View and modify settings',
     nightshift: 'Queue and trigger AI tasks',
@@ -353,6 +353,8 @@ function getActionDescription(resource: Resource, action: string): string {
   const descriptions: Record<string, string> = {
     // space
     'space create': 'Create a new space',
+    'space join': 'Clone a space that already exists',
+    'space audit': 'Report what a space is missing',
     'space list': 'List all spaces',
     // module
     'module install': 'Install a module',
@@ -396,20 +398,59 @@ function getDetailedHelp(resource: Resource, action: string): string {
     'space create': `datacore space create - Create a new space
 
 Usage:
-  datacore space create [options]
+  datacore space create <name> [options]
 
 Description:
-  Interactive wizard to create a new team or personal space.
-  Invokes the create-space agent for semantic decisions.
+  Creates a numbered space with the standard folder structure, makes it a
+  git repository, and optionally creates its remote.
+
+  On a terminal it asks where the space should live. GitHub and GitLab are
+  driven directly when their CLI is installed AND signed in — an unusable
+  one is shown with the command that fixes it rather than offered and left
+  to fail on the push. Any other host works through "paste a repo URL":
+  create the empty repo yourself on Gitea, Codeberg, Bitbucket or your own
+  server, and the URL is all this needs.
 
 Options:
-  --name <name>    Space name (lowercase, hyphenated)
-  --type <type>    Space type: team or personal
-  --yes, -y        Use defaults
+  --type <type>        team (default) or personal
+  --remote <where>     github | gitlab | url | none
+  --url <git-url>      Remote for --remote=url, or any host's empty repo
+  --visibility <vis>   private (default) or public
+  --yes, -y            Skip the prompt; local only unless --remote is given
 
 Examples:
-  datacore space create
-  datacore space create --name fds --type team`,
+  datacore space create acme
+  datacore space create acme --remote github
+  datacore space create acme --remote github --visibility public
+  datacore space create acme --url git@git.example.com:team/acme.git
+  datacore space create acme --yes`,
+
+    'space join': `datacore space join - Clone a space that already exists
+
+Usage:
+  datacore space join <git-url> [options]
+
+Description:
+  Clones an existing space repository in as the next numbered space — the
+  second machine, or the second person on a team.
+
+  The name comes from the repo unless --name says otherwise, and the number
+  is assigned locally: the same space can be 1-acme on your machine and
+  3-acme on a colleague's, because the digit orders spaces here and means
+  nothing on the host.
+
+  HTTPS is tried first and GitHub falls back to SSH, which is what private
+  spaces need on a machine with no credential helper. A clone that does not
+  look like a Datacore space is kept and flagged, not deleted.
+
+Options:
+  --name <name>    Override the name derived from the repo
+  --type <type>    team (default) or personal
+
+Examples:
+  datacore space join https://github.com/acme/acme-space
+  datacore space join git@github.com:acme/acme-space.git --name acme
+  datacore space join https://git.example.com/team/research.git`,
 
     'space list': `datacore space list - List all spaces
 

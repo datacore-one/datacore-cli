@@ -228,7 +228,7 @@ const c = {
 
 // ─── Helpers: Prompts ─────────────────────────────────────────────────────────
 
-async function prompt(question: string, defaultValue?: string): Promise<string> {
+export async function prompt(question: string, defaultValue?: string): Promise<string> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -243,14 +243,14 @@ async function prompt(question: string, defaultValue?: string): Promise<string> 
   })
 }
 
-async function confirm(question: string, defaultYes = true): Promise<boolean> {
+export async function confirm(question: string, defaultYes = true): Promise<boolean> {
   const hint = defaultYes ? '[Y/n]' : '[y/N]'
   const answer = await prompt(`${question} ${hint}`)
   if (!answer) return defaultYes
   return answer.toLowerCase().startsWith('y')
 }
 
-async function choose(question: string, options: string[], defaultIndex = 0): Promise<number> {
+export async function choose(question: string, options: string[], defaultIndex = 0): Promise<number> {
   for (let i = 0; i < options.length; i++) {
     const marker = i === defaultIndex ? `${c.cyan}>${c.reset}` : ' '
     console.log(`  ${marker} ${c.cyan}${i + 1}${c.reset}) ${options[i]}`)
@@ -1635,39 +1635,84 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
                 result.warnings.push(`Failed to add space: ${knownMatch.name}`)
               }
             } else {
-              // Not in registry - ask for URL or create local
-              const repoUrl = await prompt('  Git repo URL (or Enter to create local)', '')
+              // Not in registry — join an existing one, or make a new one.
+              const repoUrl = await prompt('  Git repo URL to join (or Enter to create a new space)', '')
+              const {
+                createSpace, initSpaceGit, joinSpace, detectForges, createSpaceRemote,
+              } = await import('./space')
 
               if (repoUrl) {
-                const currentSpaces = listSpaces()
-                const nextNum = currentSpaces.length > 0
-                  ? Math.max(...currentSpaces.map(s => s.number)) + 1
-                  : 1
-                const spacePath = join(DATA_DIR, `${nextNum}-${normalized}`)
-
+                // joinSpace owns the numbering, the SSH fallback and the
+                // is-this-actually-a-space check. This branch used to carry its
+                // own copy of the first two and neither of the others.
                 const spinner = new Spinner(`Cloning ${spaceName}...`)
                 spinner.start()
-
-                let cloned = runArgs('git', ['clone', repoUrl, spacePath], { timeout: 300000 })
-                if (!cloned) {
-                  const sshUrl = repoUrl.replace('https://github.com/', 'git@github.com:')
-                  cloned = runArgs('git', ['clone', sshUrl, spacePath], { timeout: 300000 })
-                }
-
-                if (cloned) {
-                  spinner.succeed(`Added space: ${nextNum}-${normalized}`)
-                  result.spacesCreated.push(`${nextNum}-${normalized}`)
-                } else {
-                  spinner.fail(`Could not clone ${repoUrl}`)
-                  result.warnings.push(`Failed to add space: ${spaceName}`)
+                try {
+                  const { space, warnings } = joinSpace(repoUrl, { name: normalized })
+                  spinner.succeed(`Joined space: ${space.name}`)
+                  result.spacesCreated.push(space.name)
+                  for (const w of warnings) {
+                    console.log(`    ${c.dim}${w}${c.reset}`)
+                    result.warnings.push(w)
+                  }
+                } catch (err) {
+                  spinner.fail((err as Error).message)
+                  result.warnings.push(`Failed to join space: ${spaceName}`)
                 }
               } else {
                 try {
-                  const { createSpace } = await import('./space')
                   const space = createSpace(spaceName, 'team')
                   result.created.push(space.path)
                   result.spacesCreated.push(space.name)
                   console.log(`  ${c.green}✓${c.reset} Created ${space.name}/`)
+
+                  // A space is a git repo, and a team space with no remote is
+                  // a team space only this machine can see. Ask now, while the
+                  // context is obvious, rather than leaving it to be discovered
+                  // the first time someone else needs the space.
+                  const git = initSpaceGit(space.path)
+                  if (!git.ok) {
+                    console.log(`    ${c.yellow}!${c.reset} ${c.dim}Not a git repo yet: ${git.error}${c.reset}`)
+                  } else {
+                    const forges = detectForges()
+                    const labels = [
+                      ...forges.map(f => f.available
+                        ? `${f.label}${f.account ? ` (signed in as ${f.account})` : ''}`
+                        : `${f.label} — unavailable: ${f.reason}`),
+                      'Other host — paste a repo URL',
+                      'Local only — decide later',
+                    ]
+                    console.log()
+                    console.log(`    ${c.dim}A team space is a git repo others clone. Where should it live?${c.reset}`)
+                    const pick = await choose('    Choose', labels, labels.length - 1)
+
+                    let remoteResult
+                    if (pick < forges.length && forges[pick]!.available) {
+                      const spin = new Spinner(`Creating ${forges[pick]!.label} repo...`)
+                      spin.start()
+                      remoteResult = createSpaceRemote(space.path, space.name.replace(/^\d+-/, ''), {
+                        forge: forges[pick]!.id, visibility: 'private',
+                      })
+                      remoteResult.ok
+                        ? spin.succeed(`Remote: ${remoteResult.url ?? 'origin set'}`)
+                        : spin.fail(remoteResult.error || 'could not create the repo')
+                    } else if (pick < forges.length) {
+                      console.log(`    ${c.dim}${forges[pick]!.reason} — left local.${c.reset}`)
+                    } else if (pick === forges.length) {
+                      const url = await prompt('    Repo URL (create the empty repo on your host first)')
+                      if (url) {
+                        const spin = new Spinner('Pushing...')
+                        spin.start()
+                        remoteResult = createSpaceRemote(space.path, space.name, { url })
+                        remoteResult.ok && remoteResult.pushed
+                          ? spin.succeed(`Pushed to ${url}`)
+                          : spin.fail(remoteResult.error || 'push failed')
+                      }
+                    }
+                    if (remoteResult && !remoteResult.ok) {
+                      result.warnings.push(`No remote for ${space.name}: ${remoteResult.error}`)
+                    }
+                  }
                 } catch (err) {
                   console.log(`  ${c.red}✗${c.reset} ${(err as Error).message}`)
                 }

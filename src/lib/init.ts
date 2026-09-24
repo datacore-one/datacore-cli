@@ -2196,7 +2196,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       const spinner = isTTY ? new Spinner('Building CLAUDE.md from layers...') : null
       spinner?.start()
 
-      if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR, '--all'])) {
+      if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR, '--all', '--emit'])) {
         spinner?.succeed('CLAUDE.md built from layers (all spaces)')
       } else {
         spinner?.fail('CLAUDE.md build failed (can rebuild later)')

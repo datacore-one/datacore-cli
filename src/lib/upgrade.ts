@@ -583,7 +583,7 @@ function upgradeClaudeMd(
     return
   }
 
-  if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR(), '--all'])) {
+  if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR(), '--all', '--emit'])) {
     if (isTTY) console.log(`  ${c.green}✓${c.reset} CLAUDE.md rebuilt from layers`)
     result.updated.push('CLAUDE.md rebuilt')
   } else {

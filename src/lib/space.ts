@@ -85,6 +85,18 @@ export function getNextSpaceNumber(): number {
 /**
  * Create a new space with the standard folder structure.
  */
+/**
+ * A new space's .gitignore. Every composed context file is listed: CLAUDE.md
+ * and its harness twins AGENTS.md (Codex, Cursor, Antigravity, OpenCode,
+ * OpenClaw) and GEMINI.md carry the private layer, and context_merge only
+ * writes a twin where git ignores it.
+ */
+export function spaceGitignore(type: 'personal' | 'team'): string {
+  const lines = ['.datacore/state/', '.datacore/env/', 'CLAUDE.md', 'AGENTS.md', 'GEMINI.md', 'CLAUDE.local.md']
+  if (type === 'team') lines.push('2-projects/')
+  return lines.join('\n') + '\n'
+}
+
 export function createSpace(name: string, type: 'personal' | 'team' = 'team'): SpaceInfo {
   // Determine number
   const number = type === 'personal' ? 0 : getNextSpaceNumber()
@@ -427,21 +439,7 @@ type: ${type}
   writeFileSync(join(spacePath, '.datacore', 'learning', 'preferences.md'), `# Preferences\n\nStyle and preference notes.\n`)
 
   // Create .gitignore
-  writeFileSync(
-    join(spacePath, '.gitignore'),
-    type === 'personal'
-      ? `.datacore/state/
-.datacore/env/
-CLAUDE.md
-CLAUDE.local.md
-`
-      : `.datacore/state/
-.datacore/env/
-CLAUDE.md
-CLAUDE.local.md
-2-projects/
-`
-  )
+  writeFileSync(join(spacePath, '.gitignore'), spaceGitignore(type))
 
   return {
     name: folderName,

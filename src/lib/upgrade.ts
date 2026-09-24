@@ -659,8 +659,9 @@ export async function updateDatacore(options: UpdateOptions = {}): Promise<Updat
   if (!skipDeps) {
     upgradeDependencies(platform, isTTY, result)
     const venv = ensureDatacoreVenv(DATA_DIR())
-    result.warnings.push(...venv.warnings)
+    // An error, not a warning: without it the MCP server cannot start.
     if (venv.python) result.updated.push('Python dependencies (.datacore/venv)')
+    else result.errors.push(...venv.warnings)
     const moduleWarnings = ensureModuleDeps(DATA_DIR())
     result.warnings.push(...moduleWarnings)
     if (moduleWarnings.length === 0) result.updated.push('Module tool runtime (.datacore/modules)')

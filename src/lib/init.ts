@@ -39,7 +39,7 @@ import { spawnBackground, type BackgroundJob } from './background'
 // success having created nothing — so every install bug had to be found by a
 // human on a clean laptop. Read at module load, which is correct for an env var
 // the caller sets before starting the process (see the init smoke test).
-import { ensureDatacoreVenv, ensureModuleDeps, pipInstallInto, venvPython } from './python-env'
+import { ensureDatacoreVenv, ensureModuleDeps, initSucceeded, pipInstallInto, venvPython } from './python-env'
 
 const DATA_DIR = process.env.DATACORE_ROOT || join(process.env.HOME || '', 'Data')
 const DATACORE_DIR = join(DATA_DIR, '.datacore')
@@ -2669,7 +2669,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       }
     }
 
-    result.success = unresolvable.length === 0 && incomplete.length === 0
+    result.success = initSucceeded({ unresolvable, incomplete, errors: result.errors })
     // Append, never assign: steps pushed by earlier phases (the Chief of
     // Staff persona path, for one) were being discarded by a bare assignment.
     result.nextSteps.push(

@@ -19,12 +19,15 @@
  */
 
 import { execFileSync } from 'child_process'
+import { existsSync } from 'fs'
+import { join } from 'path'
 
 /** Datacore libraries use PEP-604 unions, which require 3.10. */
 const MIN_MAJOR = 3
 const MIN_MINOR = 10
 
 let cached: string | null | undefined
+let cachedRoot: string | undefined
 
 /**
  * Candidates in preference order. DATACORE_PYTHON wins outright so an operator
@@ -32,10 +35,13 @@ let cached: string | null | undefined
  * already uses that variable name, and diverging would mean one installation
  * needing two different answers to the same question.
  */
-function candidates(): string[] {
+function candidates(root?: string): string[] {
   const list: string[] = []
   const explicit = process.env.DATACORE_PYTHON
   if (explicit) list.push(explicit)
+  // The installation's own venv holds the dependencies `datacore init` installed.
+  const venv = root ? join(root, '.datacore', 'venv', 'bin', 'python') : null
+  if (venv && existsSync(venv)) list.push(venv)
   // Version-qualified names first: they cannot be the 3.9 system binary.
   list.push('python3.13', 'python3.12', 'python3.11', 'python3.10')
   // Homebrew's is the real interpreter on most Macs, and is NOT first on PATH
@@ -49,7 +55,9 @@ function versionOf(bin: string): [number, number] | null {
   try {
     const out = execFileSync(
       bin,
-      ['-c', 'import sys;print("%d.%d" % sys.version_info[:2])'],
+      // yaml too: the ledger and catalog import it at module top, so an
+      // interpreter without it crashes on every call however new it is.
+      ['-c', 'import sys, yaml;print("%d.%d" % sys.version_info[:2])'],
       { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] },
     ).trim()
     const parts = out.split('.').map(Number)
@@ -69,9 +77,10 @@ function versionOf(bin: string): [number, number] | null {
  * or null if there is none. Null is a real answer, not an error: the caller
  * decides what degraded behaviour is safe.
  */
-export function findPython(): string | null {
-  if (cached !== undefined) return cached
-  for (const bin of candidates()) {
+export function findPython(root?: string): string | null {
+  if (cached !== undefined && cachedRoot === root) return cached
+  cachedRoot = root
+  for (const bin of candidates(root)) {
     const v = versionOf(bin)
     if (v && (v[0] > MIN_MAJOR || (v[0] === MIN_MAJOR && v[1] >= MIN_MINOR))) {
       cached = bin
@@ -85,6 +94,19 @@ export function findPython(): string | null {
 /** Test seam — resolution is cached because probing spawns processes. */
 export function resetPythonCache(): void {
   cached = undefined
+  cachedRoot = undefined
+}
+
+/**
+ * A verifier that exits non-zero has either reached a verdict or crashed
+ * before reaching one. Python exits 1 for an uncaught exception, the same
+ * code `ledger_cli.py verify` uses for a broken chain, so the traceback is
+ * what tells them apart. Calling a crash "broken" sent the owner looking for
+ * corruption that did not exist (all ten spaces, 2026-09-24).
+ */
+export function classifyVerifyFailure(err: { status?: number; stderr?: string | Buffer; message?: string }): 'broken' | 'unverifiable' {
+  if (typeof err.status !== 'number') return 'unverifiable'
+  return /Traceback \(most recent call last\)/.test(String(err.stderr ?? '')) ? 'unverifiable' : 'broken'
 }
 
 export const PYTHON_MIN_VERSION = `${MIN_MAJOR}.${MIN_MINOR}`

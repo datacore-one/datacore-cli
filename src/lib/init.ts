@@ -39,6 +39,8 @@ import { spawnBackground, type BackgroundJob } from './background'
 // success having created nothing — so every install bug had to be found by a
 // human on a clean laptop. Read at module load, which is correct for an env var
 // the caller sets before starting the process (see the init smoke test).
+import { ensureDatacoreVenv, ensureModuleDeps, initSucceeded, pipInstallInto, venvPython } from './python-env'
+
 const DATA_DIR = process.env.DATACORE_ROOT || join(process.env.HOME || '', 'Data')
 const DATACORE_DIR = join(DATA_DIR, '.datacore')
 const UPSTREAM_REPO = 'datacore-one/datacore'
@@ -723,7 +725,12 @@ export function runModulePostInstall(modulePath: string): { ran: boolean; succes
   // Check for Python dependencies
   const reqTxt = join(modulePath, 'requirements.txt')
   if (existsSync(reqTxt)) {
-    const ok = runArgs('python3', ['-m', 'pip', 'install', '-r', reqTxt, '--quiet'], { cwd: modulePath, timeout: 120000 })
+    // Into .datacore/venv when it exists: Homebrew Python refuses a
+    // system-wide pip install (PEP 668), which failed every module's deps.
+    const venvPy = venvPython(DATA_DIR)
+    const ok = existsSync(venvPy)
+      ? pipInstallInto(venvPy, reqTxt).ok
+      : runArgs('python3', ['-m', 'pip', 'install', '-r', reqTxt, '--quiet'], { cwd: modulePath, timeout: 120000 })
     return { ran: true, success: ok, type: 'pip' }
   }
 
@@ -2102,6 +2109,11 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       modulesToInstall = allModules.filter((m) => !m.private)
     }
 
+    // Python dependencies go into .datacore/venv before any module needs them.
+    const venv = ensureDatacoreVenv(DATA_DIR)
+    result.warnings.push(...venv.warnings)
+    if (!venv.python) result.errors.push('Core Python dependencies are not installed; the MCP server cannot start. Fix: datacore update')
+
     // Install selected modules
     let installCount = 0
     for (const mod of modulesToInstall) {
@@ -2126,6 +2138,9 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         } else if (postInstall.ran && !postInstall.success) {
           spinner?.succeed(`${mod.name}`)
           if (isTTY) console.log(`    ${c.yellow}⚠${c.reset} ${c.dim}Dependency install failed (${postInstall.type})${c.reset}`)
+          // Into the result too: a printed-only warning left the JSON saying
+          // success with no warnings while four modules had no dependencies.
+          result.warnings.push(`${mod.name}: ${postInstall.type} dependencies failed to install`)
         } else {
           spinner?.succeed(mod.name)
         }
@@ -2140,6 +2155,9 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       console.log(`  ${c.green}${installCount} modules installed.${c.reset}`)
       console.log()
     }
+
+    // Module tools import @datacore-one/mcp/runtime from .datacore/modules/node_modules.
+    result.warnings.push(...ensureModuleDeps(DATA_DIR))
 
     op.completeStep('modules')
 
@@ -2178,7 +2196,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       const spinner = isTTY ? new Spinner('Building CLAUDE.md from layers...') : null
       spinner?.start()
 
-      if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR, '--all'])) {
+      if (runArgs('python3', [contextMerge, 'rebuild', '--path', DATA_DIR, '--all', '--emit'])) {
         spinner?.succeed('CLAUDE.md built from layers (all spaces)')
       } else {
         spinner?.fail('CLAUDE.md build failed (can rebuild later)')
@@ -2651,7 +2669,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       }
     }
 
-    result.success = unresolvable.length === 0 && incomplete.length === 0
+    result.success = initSucceeded({ unresolvable, incomplete, errors: result.errors })
     // Append, never assign: steps pushed by earlier phases (the Chief of
     // Staff persona path, for one) were being discarded by a bare assignment.
     result.nextSteps.push(

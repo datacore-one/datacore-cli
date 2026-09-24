@@ -334,7 +334,7 @@ export function installModule(source: string): ModuleInfo {
     // Say so. The symptom otherwise appears much later and somewhere else.
     console.warn(`  warning: ${info.name} installed, but its ${post.type} dependencies failed.`)
     console.warn(`  Retry with: cd ${modulePath} && ${post.type === 'pip'
-      ? 'python3 -m pip install -r requirements.txt' : 'npm install'}`)
+      ? '<Data>/.datacore/venv/bin/python -m pip install -r requirements.txt' : 'npm install'}`)
   }
 
   return info

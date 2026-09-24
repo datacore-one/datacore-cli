@@ -78,3 +78,20 @@ describe('Space Management', () => {
     })
   })
 })
+
+import { spaceGitignore } from '../src/lib/space'
+
+describe('spaceGitignore', () => {
+  it('ignores every composed context file, not only CLAUDE.md', () => {
+    for (const type of ['personal', 'team'] as const) {
+      const lines = spaceGitignore(type).split('\n')
+      for (const name of ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', 'CLAUDE.local.md']) {
+        expect(lines).toContain(name)
+      }
+    }
+  })
+  it('keeps team project working copies out of the space repo', () => {
+    expect(spaceGitignore('team').split('\n')).toContain('2-projects/')
+    expect(spaceGitignore('personal').split('\n')).not.toContain('2-projects/')
+  })
+})

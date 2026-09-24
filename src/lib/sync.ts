@@ -21,7 +21,7 @@ const DATA_DIR = dataDir()
 function findLedgerTransport(): { python: string; script: string } | null {
   const script = join(datacoreLib(), 'ledger_transport.py')
   if (!existsSync(script)) return null
-  const python = findPython()
+  const python = findPython(DATA_DIR)
   if (!python) return null
   return { python, script }
 }

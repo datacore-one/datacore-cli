@@ -28,6 +28,7 @@ import { pullAll } from './sync'
 // developer's REAL ~/Data instead of its own -- meaning the install under test
 // had no .mcp.json at all, and the machine running the test had its live
 // config written to by a throwaway install.
+import { ensureDatacoreVenv, ensureModuleDeps } from './python-env'
 const DATA_DIR = () => dataDir()
 const DATACORE_DIR = () => join(dataDir(), '.datacore')
 
@@ -654,9 +655,15 @@ export async function updateDatacore(options: UpdateOptions = {}): Promise<Updat
     updateModulesStep(isTTY, result)
   }
 
-  // Step 3: Dependencies (MCP server)
+  // Step 3: Dependencies (MCP server, .datacore/venv, module tool runtime)
   if (!skipDeps) {
     upgradeDependencies(platform, isTTY, result)
+    const venv = ensureDatacoreVenv(DATA_DIR())
+    result.warnings.push(...venv.warnings)
+    if (venv.python) result.updated.push('Python dependencies (.datacore/venv)')
+    const moduleWarnings = ensureModuleDeps(DATA_DIR())
+    result.warnings.push(...moduleWarnings)
+    if (moduleWarnings.length === 0) result.updated.push('Module tool runtime (.datacore/modules)')
   }
 
   // Step 4: MCP configuration

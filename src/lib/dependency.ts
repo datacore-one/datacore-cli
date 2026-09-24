@@ -8,7 +8,7 @@ import { join, basename } from 'path'
 import type { DependencyCheck, DoctorResult, LedgerCheck } from '../types'
 import { detectPlatform, getInstallCommand, getPlatformInfo, type Platform } from './platform'
 import { dataDir as resolveDataDir } from './paths'
-import { findPython, PYTHON_MIN_VERSION } from './python'
+import { classifyVerifyFailure, findPython, PYTHON_MIN_VERSION } from './python'
 import { listSpaces } from './space'
 
 function commandExists(cmd: string): boolean {
@@ -347,7 +347,7 @@ function checkLedger(): LedgerCheck[] {
   const checks: LedgerCheck[] = []
   const root = resolveDataDir()
 
-  const python = findPython()
+  const python = findPython(root)
   if (!python) {
     checks.push({
       name: 'python',
@@ -396,10 +396,9 @@ function checkLedger(): LedgerCheck[] {
         stdio: ['pipe', 'pipe', 'pipe'],
       })
     } catch (err: unknown) {
-      const e = err as { status?: number; message?: string }
-      // A non-zero exit is a real verdict (chain broken). A spawn failure is
-      // not — it means we never got an answer, which is a different finding.
-      if (typeof e.status === 'number') broken.push(basename(space))
+      // A clean non-zero exit is a verdict (chain broken). A spawn failure or
+      // a Python traceback is not — we never got an answer.
+      if (classifyVerifyFailure(err as { status?: number; stderr?: string }) === 'broken') broken.push(basename(space))
       else unverifiable.push(basename(space))
     }
   }
@@ -450,7 +449,7 @@ export function runDoctor(): DoctorResult {
   // condition here that makes the installation's own history untrustworthy.
   if (ledger.some((c) => c.ok === false)) status = 'ledger_degraded'
 
-  const py = findPython()
+  const py = findPython(resolveDataDir())
 
   return {
     platform: `${platform} (${release})`,

@@ -364,7 +364,10 @@ function mcpEntry(name: string): McpEntry {
     } catch { /* fall back to our own prefix */ }
     for (const prefix of prefixes) {
       const script = windowsScriptFor(prefix, MCP_PACKAGE[name]!, bin)
-      if (script && existsSync(script)) return windowsMcpEntry(process.execPath, script)
+      // The system node, not process.execPath: that is whatever runtime this
+      // CLI happens to run under (bun in the smoke test, a version manager's
+      // node elsewhere), and the MCP client will outlive this process.
+      if (script && existsSync(script)) return windowsMcpEntry(which('node') ?? process.execPath, script)
     }
   }
   return { command: resolveBinary(bin) ?? bin }

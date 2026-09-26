@@ -6,8 +6,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { OperationState, OperationStep } from './types'
+import { homeDir } from './lib/exec'
 
-const STATE_DIR = join(process.env.HOME || '~', 'Data', '.datacore', 'state')
+const STATE_DIR = join(homeDir(), 'Data', '.datacore', 'state')
 const STATE_FILE = join(STATE_DIR, 'operations.json')
 
 interface StateStore {

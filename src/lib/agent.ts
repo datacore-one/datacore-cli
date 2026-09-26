@@ -5,7 +5,7 @@
  * which spawns subagents with specific system prompts.
  */
 
-import { spawn } from 'child_process'
+import { spawn, which } from './exec'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import type { AgentInvocation, AgentResult } from '../types'
@@ -14,13 +14,7 @@ import { dataDir } from './paths'
 const DATA_DIR = () => dataDir()
 
 function commandExists(cmd: string): boolean {
-  try {
-    const { execSync } = require('child_process')
-    execSync(`which ${cmd}`, { stdio: 'pipe' })
-    return true
-  } catch {
-    return false
-  }
+  return which(cmd) !== null
 }
 
 export interface InvokeOptions {

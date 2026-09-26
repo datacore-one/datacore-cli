@@ -1,0 +1,42 @@
+# The CLI is developed on macOS; this is the only place its Windows path runs.
+# The first Windows user hit seven "Failed to install" lines because nothing
+# here ever executed on Windows.
+name: windows
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install pyyaml
+      - run: bun install
+      - name: Platform unit tests
+        run: bun test tests/windows.test.ts
+      - name: Real Windows checks (cmd.exe, where, npm shims)
+        shell: pwsh
+        run: |
+          Remove-Item Env:HOME -ErrorAction SilentlyContinue
+          bun scripts/windows-smoke.ts
+      - name: Built CLI detects installed tools (HOME unset, as on a user's machine)
+        shell: pwsh
+        run: |
+          bun run build
+          npm pack
+          npm install -g (Get-ChildItem datacore-one-cli-*.tgz).FullName
+          Remove-Item Env:HOME -ErrorAction SilentlyContinue
+          $r = datacore doctor --format json | ConvertFrom-Json
+          $r.dependencies | Format-Table name, installed, version
+          "home: $($r.home)"
+          foreach ($n in 'git','node','python') {
+            $d = $r.dependencies | Where-Object name -eq $n
+            if (-not $d.installed) { throw "$n reported missing on a runner that has it" }
+          }
+          if ($r.home -notmatch '^[A-Za-z]:\\') { throw "home is not an absolute Windows path: $($r.home)" }

@@ -7,7 +7,7 @@ import { runModulePostInstall } from './init'
 
 import { existsSync, readdirSync, readFileSync, rmSync } from 'fs'
 import { join, basename } from 'path'
-import { execFileSync } from 'child_process'
+import { execFileSync } from './exec'
 import type { ModuleInfo } from '../types'
 import { dataDir } from './paths'
 

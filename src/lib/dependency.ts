@@ -2,7 +2,9 @@
  * Dependency checking utilities.
  */
 
-import { execSync, execFileSync } from 'child_process'
+import { execSync } from 'child_process'
+import { execFileSync, homeDir } from './exec'
+import { resolveBinary } from './upgrade'
 import { existsSync, readFileSync } from 'fs'
 import { join, basename } from 'path'
 import type { DependencyCheck, DoctorResult, LedgerCheck } from '../types'
@@ -12,12 +14,9 @@ import { classifyVerifyFailure, findPython, PYTHON_MIN_VERSION } from './python'
 import { listSpaces } from './space'
 
 function commandExists(cmd: string): boolean {
-  try {
-    execSync(`which ${cmd}`, { stdio: 'pipe' })
-    return true
-  } catch {
-    return false
-  }
+  // Same lookup init uses, so doctor and the installer cannot disagree about
+  // whether a tool is there.
+  return resolveBinary(cmd) !== null
 }
 
 function getVersion(cmd: string, versionFlag = '--version'): string | undefined {
@@ -223,7 +222,7 @@ function checkPlurMcp(platform: Platform): DependencyCheck {
 }
 
 export function checkCodePermissions(): { enableAll: boolean; mcpAllowed: boolean } {
-  const home = process.env.HOME || ''
+  const home = homeDir()
   const settingsPaths = [
     join(home, 'Data', '.claude', 'settings.local.json'),
     join(home, 'Data', '.claude', 'settings.json'),
@@ -252,7 +251,7 @@ export function checkCodePermissions(): { enableAll: boolean; mcpAllowed: boolea
 
 export function checkMcpConfig(): { claudeDesktop: boolean; claudeCode: boolean } {
   // Check Claude Desktop config
-  const home = process.env.HOME || ''
+  const home = homeDir()
   const desktopPaths = [
     join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'), // macOS
     join(home, '.config', 'claude', 'claude_desktop_config.json'), // Linux
@@ -454,7 +453,7 @@ export function runDoctor(): DoctorResult {
   return {
     platform: `${platform} (${release})`,
     arch,
-    home: process.env.HOME || '~',
+    home: homeDir(),
     dataDir: resolveDataDir(),
     python: { path: py },
     datacoreExists: datacore.exists,

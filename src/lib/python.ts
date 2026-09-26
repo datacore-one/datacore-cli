@@ -18,7 +18,8 @@
  * take the first that clears the floor.
  */
 
-import { execFileSync } from 'child_process'
+import { execFileSync } from './exec'
+import { venvPython } from './python-env'
 import { existsSync } from 'fs'
 import { join } from 'path'
 
@@ -40,7 +41,7 @@ function candidates(root?: string): string[] {
   const explicit = process.env.DATACORE_PYTHON
   if (explicit) list.push(explicit)
   // The installation's own venv holds the dependencies `datacore init` installed.
-  const venv = root ? join(root, '.datacore', 'venv', 'bin', 'python') : null
+  const venv = root ? venvPython(root) : null
   if (venv && existsSync(venv)) list.push(venv)
   // Version-qualified names first: they cannot be the 3.9 system binary.
   list.push('python3.13', 'python3.12', 'python3.11', 'python3.10')
@@ -48,6 +49,9 @@ function candidates(root?: string): string[] {
   // for non-interactive shells — which is how a launchd job ends up on 3.9.
   list.push('/opt/homebrew/bin/python3', '/usr/local/bin/python3')
   list.push('python3')
+  // Windows installs name it python.exe; python3 there is often only the
+  // Microsoft Store stub, which exits without running anything.
+  if (process.platform === 'win32') list.push('python')
   return list
 }
 

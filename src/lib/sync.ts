@@ -4,7 +4,8 @@
  * Handles git pull/push across all spaces.
  */
 
-import { execSync, spawn, execFileSync } from 'child_process'
+import { execSync } from 'child_process'
+import { execFileSync, spawn } from './exec'
 import { existsSync } from 'fs'
 import { join, basename } from 'path'
 import { listSpaces } from './space'

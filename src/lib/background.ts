@@ -3,11 +3,11 @@
  * Used by init (ingest) and potentially nightshift.
  */
 
-import { spawn } from 'child_process'
+import { spawn, homeDir } from './exec'
 import { openSync, closeSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
-const DATA_DIR = join(process.env.HOME || '', 'Data')
+const DATA_DIR = join(homeDir(), 'Data')
 const STATE_DIR = join(DATA_DIR, '.datacore', 'state')
 
 export interface BackgroundJob {

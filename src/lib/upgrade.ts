@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { execFileSync } from 'child_process'
+import { execFileSync, homeDir, npmBinCandidates, runShell, which } from './exec'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { updateModules, listModules } from './module'
@@ -69,7 +69,7 @@ const c = {
 
 
 /** Where we install when npm's global prefix is not writable (see init.ts). */
-export const FALLBACK_NPM_PREFIX = join(process.env.HOME || '', '.datacore', 'npm')
+export const FALLBACK_NPM_PREFIX = join(homeDir(), '.datacore', 'npm')
 
 /**
  * Absolute path of a CLI binary, or null.
@@ -81,18 +81,17 @@ export const FALLBACK_NPM_PREFIX = join(process.env.HOME || '', '.datacore', 'np
  * is extremely common.
  */
 export function resolveBinary(cmd: string): string | null {
-  try {
-    const p = execFileSync('which', [cmd], { stdio: 'pipe' }).toString().trim()
-    if (p) return p
-  } catch { /* not on PATH — keep looking */ }
+  const onPath = which(cmd)
+  if (onPath) return onPath
 
   const candidates: string[] = []
   try {
     const prefix = execFileSync('npm', ['config', 'get', 'prefix'], { stdio: 'pipe' })
       .toString().trim()
-    if (prefix && prefix !== 'undefined') candidates.push(join(prefix, 'bin', cmd))
+    if (prefix && prefix !== 'undefined') candidates.push(...npmBinCandidates(prefix, cmd))
   } catch { /* npm not answering — fall through */ }
-  candidates.push(join(FALLBACK_NPM_PREFIX, 'bin', cmd))
+  // The fallback is installed with `-g --prefix`, so it has the same layout.
+  candidates.push(...npmBinCandidates(FALLBACK_NPM_PREFIX, cmd))
 
   for (const c of candidates) {
     if (existsSync(c)) return c
@@ -101,12 +100,7 @@ export function resolveBinary(cmd: string): string | null {
 }
 
 function commandExists(cmd: string): boolean {
-  try {
-    execFileSync('which', [cmd], { stdio: 'pipe' })
-    return true
-  } catch {
-    return false
-  }
+  return which(cmd) !== null
 }
 
 function getVersionString(cmd: string, flag = '--version'): string | undefined {
@@ -255,7 +249,7 @@ function upgradeDependencies(
     if (installCmd) {
       if (isTTY) process.stdout.write(`  Installing datacore-mcp...`)
       try {
-        execFileSync('/bin/bash', ['-c', installCmd], { stdio: 'pipe', timeout: 300000 })
+        runShell(installCmd, { stdio: 'pipe', timeout: 300000 })
         if (commandExists('datacore-mcp')) {
           const version = getVersionString('datacore-mcp', '--version')
           if (isTTY) console.log(`\r  ${c.green}✓${c.reset} datacore-mcp installed ${c.dim}(${version})${c.reset}`)
@@ -341,7 +335,7 @@ export function unresolvableMcpServers(): string[] {
 type McpTarget = 'code' | 'desktop' | 'both'
 
 function detectClaudeDesktopConfigDir(): string | null {
-  const home = process.env.HOME || ''
+  const home = homeDir()
   const paths = [
     join(home, 'Library', 'Application Support', 'Claude'), // macOS
     join(home, '.config', 'claude'),                         // Linux

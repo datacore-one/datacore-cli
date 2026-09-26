@@ -22,6 +22,7 @@ import { listModules, installModule, updateModules, removeModule } from './lib/m
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
 import * as app from './lib/app'
 import { VERSION } from './version'
+import { homeDir } from './lib/exec'
 
 
 
@@ -717,7 +718,7 @@ async function handleResource(
           // Add task to inbox.org with :AI: tag
           const { existsSync, appendFileSync } = await import('fs')
           const { join } = await import('path')
-          const inboxPath = join(process.env.HOME || '~', 'Data', '0-personal', 'org', 'inbox.org')
+          const inboxPath = join(homeDir(), 'Data', '0-personal', 'org', 'inbox.org')
 
           if (!existsSync(inboxPath)) {
             throw new CLIError('ERR_NOT_FOUND', 'inbox.org not found. Run datacore init first.')

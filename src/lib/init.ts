@@ -19,7 +19,7 @@
 
 import { existsSync, mkdirSync, writeFileSync, symlinkSync, copyFileSync, readdirSync, readFileSync, statSync, cpSync } from 'fs'
 import { join, basename } from 'path'
-import { execFileSync } from 'child_process'
+import { execFileSync, homeDir, npmBinCandidates, refreshWindowsPath, runShell } from './exec'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { AVAILABLE_MODULES, installModule, listModules } from './module'
@@ -41,7 +41,7 @@ import { spawnBackground, type BackgroundJob } from './background'
 // the caller sets before starting the process (see the init smoke test).
 import { ensureDatacoreVenv, ensureModuleDeps, initSucceeded, pipInstallInto, venvPython } from './python-env'
 
-const DATA_DIR = process.env.DATACORE_ROOT || join(process.env.HOME || '', 'Data')
+const DATA_DIR = process.env.DATACORE_ROOT || join(homeDir(), 'Data')
 const DATACORE_DIR = join(DATA_DIR, '.datacore')
 const UPSTREAM_REPO = 'datacore-one/datacore'
 const TOTAL_STEPS = 10
@@ -335,13 +335,7 @@ function commandExists(cmd: string): boolean {
   // resolveBinary also looks in npm's configured prefix and our fallback
   // prefix. `which` alone reported binaries as missing that were installed
   // and working, purely because the prefix bin was not on PATH.
-  if (resolveBinary(cmd)) return true
-  try {
-    execFileSync('which', [cmd], { stdio: 'pipe' })
-    return true
-  } catch {
-    return false
-  }
+  return resolveBinary(cmd) !== null
 }
 
 function getVersionString(cmd: string, flag = '--version'): string | undefined {
@@ -413,7 +407,7 @@ function cosPersonaName(): string {
  * working memory server, whatever the Code config says.
  */
 function mcpConfigured(name: string): boolean {
-  const home = process.env.HOME || ''
+  const home = homeDir()
   const candidates = [
     join(DATA_DIR, '.mcp.json'),
     join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
@@ -454,7 +448,7 @@ function localiseHookPaths(isTTY: boolean | undefined, result: InitResult): void
   const settingsPath = join(DATACORE_DIR, 'settings.json')
   if (!existsSync(settingsPath)) return
 
-  const home = process.env.HOME || ''
+  const home = homeDir()
   const defaultRoot = join(home, 'Data')
   if (DATA_DIR === defaultRoot) return  // nothing to rewrite
 
@@ -592,10 +586,12 @@ async function ensureDependency(
   }, 1000) : null
 
   try {
-    // Install commands may contain shell operators (pipes, &&), so use bash.
-    // `inherit` also connects stdin, so a prompt can actually be answered.
-    execFileSync('/bin/bash', ['-c', installCmd],
-                 { stdio: isTTY ? 'inherit' : 'pipe', timeout: 900000 })
+    // Install commands may contain shell operators (pipes, &&), so they run
+    // through a shell: bash, or cmd.exe on Windows. `inherit` also connects
+    // stdin, so a prompt can actually be answered.
+    runShell(installCmd, { stdio: isTTY ? 'inherit' : 'pipe', timeout: 900000 })
+    // winget writes the new PATH to the registry, not to this process.
+    refreshWindowsPath()
 
     if (ticker) clearInterval(ticker)
     // Verify it's now available
@@ -623,7 +619,7 @@ async function ensureDependency(
       // touching PATH — which is the half of the usual remedy people skip,
       // and the reason an install could look complete and launch nothing.
       const pkg = installCmd.replace('npm install -g ', '').trim()
-      const fallbackBin = join(FALLBACK_NPM_PREFIX, 'bin', checkCmd)
+      const fallbackBin = npmBinCandidates(FALLBACK_NPM_PREFIX, checkCmd)[0]!
       try {
         mkdirSync(FALLBACK_NPM_PREFIX, { recursive: true })
         execFileSync('npm', ['install', '--prefix', FALLBACK_NPM_PREFIX, '-g', pkg],
@@ -685,7 +681,7 @@ async function ensureHomebrew(isTTY: boolean): Promise<boolean> {
   spinner?.start()
 
   try {
-    execFileSync('/bin/bash', ['-c', 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'], {
+    runShell('NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"', {
       stdio: 'pipe',
       timeout: 600000,
     })
@@ -1447,7 +1443,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         { timeout: 30000 })
       const forkExists = parent === UPSTREAM_REPO
       const wrongRepoInTheWay = !forkExists
-        && runArgs('gh', ['repo', 'view', `${ghUser}/datacore`], { cwd: process.env.HOME, timeout: 30000 })
+        && runArgs('gh', ['repo', 'view', `${ghUser}/datacore`], { cwd: homeDir(), timeout: 30000 })
 
       if (wrongRepoInTheWay) {
         // Do not touch it, do not clone it, and do not pretend it is ours.
@@ -2233,7 +2229,8 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     const claudeDir = join(DATA_DIR, '.claude')
     if (!existsSync(claudeDir) && existsSync(DATACORE_DIR)) {
       try {
-        symlinkSync(DATACORE_DIR, claudeDir)
+        // A junction needs no admin rights on Windows; a symlink does.
+        symlinkSync(DATACORE_DIR, claudeDir, platform === 'windows' ? 'junction' : 'dir')
         result.created.push(claudeDir)
       } catch {
         // Ignore
@@ -2361,7 +2358,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         if (choiceNum === 1) {
           // ChatGPT export
           const chatPath = await prompt('  Path to ChatGPT export')
-          const chatResolved = chatPath?.startsWith('~') ? join(process.env.HOME || '', chatPath.slice(1)) : chatPath
+          const chatResolved = chatPath?.startsWith('~') ? join(homeDir(), chatPath.slice(1)) : chatPath
           if (chatResolved && existsSync(chatResolved)) {
             const resolvedPath = chatResolved
 
@@ -2425,7 +2422,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
           const label = choiceNum === 2 ? 'documents' : 'notes'
           const sourcePath = await prompt(`  Path to ${label}`)
           if (sourcePath) {
-            const resolvedPath = sourcePath.startsWith('~') ? join(process.env.HOME || '', sourcePath.slice(1)) : sourcePath
+            const resolvedPath = sourcePath.startsWith('~') ? join(homeDir(), sourcePath.slice(1)) : sourcePath
             if (existsSync(resolvedPath)) {
               const spinner = new Spinner(`Scanning ${resolvedPath}...`)
               spinner.start()

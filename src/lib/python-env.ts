@@ -11,7 +11,7 @@
  * install every module's tools fail to load and the server quietly offers 12
  * tools instead of 45+.
  */
-import { execFileSync } from 'child_process'
+import { execFileSync } from './exec'
 import { existsSync, rmSync } from 'fs'
 import { join } from 'path'
 
@@ -26,8 +26,11 @@ const defaultRun: Runner = (cmd, args, opts) => {
   }
 }
 
-export function venvPython(dataDir: string): string {
-  return join(dataDir, '.datacore', 'venv', 'bin', 'python')
+export function venvPython(dataDir: string, platform: NodeJS.Platform = process.platform): string {
+  // Windows venvs put the interpreter in Scripts\, not bin/.
+  return platform === 'win32'
+    ? join(dataDir, '.datacore', 'venv', 'Scripts', 'python.exe')
+    : join(dataDir, '.datacore', 'venv', 'bin', 'python')
 }
 
 export function pipInstallInto(python: string, requirements: string, run: Runner = defaultRun) {

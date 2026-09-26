@@ -19,10 +19,10 @@
  */
 
 import { join } from 'path'
-import { homedir } from 'os'
+import { homeDir } from './exec'
 
 export function dataDir(): string {
-  return process.env.DATACORE_ROOT || join(process.env.HOME || homedir(), 'Data')
+  return process.env.DATACORE_ROOT || join(homeDir(), 'Data')
 }
 
 /** The core library directory — where the Python transport and tools live. */

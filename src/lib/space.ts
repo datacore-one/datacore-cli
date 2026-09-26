@@ -6,7 +6,7 @@
 
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import { join, basename } from 'path'
-import { execFileSync } from 'child_process'
+import { execFileSync, which } from './exec'
 import type { SpaceInfo } from '../types'
 import { dataDir } from './paths'
 
@@ -592,7 +592,7 @@ function run(bin: string, args: string[], opts: { cwd?: string; timeout?: number
 }
 
 function binExists(bin: string): boolean {
-  return run('which', [bin]).ok
+  return which(bin) !== null
 }
 
 export type ForgeId = 'github' | 'gitlab'

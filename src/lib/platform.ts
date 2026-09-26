@@ -36,34 +36,42 @@ export function getPlatformInfo(): { platform: Platform; arch: string; release: 
   }
 }
 
+/**
+ * winget, by exact id, with agreements pre-accepted. Without the flags winget
+ * stops to ask on first use, and a run driven by an agent has nobody to answer.
+ */
+function winget(id: string): string {
+  return `winget install --id ${id} --exact --silent --accept-package-agreements --accept-source-agreements`
+}
+
 export function getInstallCommand(pkg: string, platform: Platform): string | null {
   const commands: Record<string, Record<Platform, string | null>> = {
     git: {
       macos: 'brew install git',
       linux: 'sudo apt-get install git',
       wsl: 'sudo apt-get install git',
-      windows: 'winget install Git.Git',
+      windows: winget('Git.Git'),
       unknown: null,
     },
     node: {
       macos: 'brew install node',
       linux: 'curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs',
       wsl: 'curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs',
-      windows: 'winget install OpenJS.NodeJS',
+      windows: winget('OpenJS.NodeJS.LTS'),
       unknown: null,
     },
     python: {
       macos: 'brew install python@3.11',
       linux: 'sudo apt-get install python3',
       wsl: 'sudo apt-get install python3',
-      windows: 'winget install Python.Python.3.11',
+      windows: winget('Python.Python.3.11'),
       unknown: null,
     },
     gh: {
       macos: 'brew install gh',
       linux: 'sudo apt-get install gh',
       wsl: 'sudo apt-get install gh',
-      windows: 'winget install GitHub.cli',
+      windows: winget('GitHub.cli'),
       unknown: null,
     },
     claude: {

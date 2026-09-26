@@ -125,14 +125,20 @@ Description:
   All steps are idempotent — safe to run repeatedly.
 
   Steps:
-  1. Git pull all repos (root + spaces)
+  0. Update this CLI if npm has a newer one, then continue under it
+  1. Git pull all repos (root + spaces); on a forked install, merge
+     datacore-one/datacore into your fork and push it (merge, never rebase;
+     stops without changing anything on uncommitted changes or a conflict)
   2. Git pull all installed modules
-  3. Install/update MCP server (npm install -g @datacore-one/mcp)
-  4. Configure MCP for Claude Code/Desktop (asks on first run)
-  5. Rebuild CLAUDE.md from layers
-  6. Update installation snapshot
+  3. Install or upgrade the MCP servers (@datacore-one/mcp, @plur-ai/mcp)
+  4. Configure MCP for Claude Code/Desktop (asks on first run) and every
+     other installed harness: Cursor, Codex, Antigravity, Gemini CLI, Windsurf
+  5. Enable the git safety hooks if they are off
+  6. Rebuild CLAUDE.md from layers
+  7. Update installation snapshot
 
 Options:
+  --skip-self-update   Keep this CLI version
   --skip-modules       Skip module updates
   --skip-deps          Skip dependency installation
   --yes, -y            Non-interactive (default to Claude Code)

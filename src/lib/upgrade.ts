@@ -11,6 +11,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { execFileSync, homeDir, npmBinCandidates, runShell, which } from './exec'
+import { harnessConfigs, windowsMcpEntry, windowsScriptFor, wireHarnesses, type McpEntry } from './harness'
+import { mergeUpstream, upgradeMcpPackages } from './selfupdate'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { updateModules, listModules } from './module'
@@ -68,6 +70,23 @@ const c = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
+/** Point git at the repo's own safety hooks when nothing else is configured. */
+function ensureSafetyHooks(isTTY: boolean, result: UpdateResult): void {
+  const hooksDir = join(DATA_DIR(), '.datacore', 'githooks')
+  if (!existsSync(hooksDir) || !existsSync(join(DATA_DIR(), '.git'))) return
+  try {
+    execFileSync('git', ['config', 'core.hooksPath'], { cwd: DATA_DIR(), stdio: 'pipe' })
+    return // set already (by init, or deliberately by the user)
+  } catch { /* unset: git exits 1 */ }
+  try {
+    execFileSync('git', ['config', 'core.hooksPath', '.datacore/githooks'], { cwd: DATA_DIR(), stdio: 'pipe' })
+    if (isTTY) console.log(`  ${c.green}✓${c.reset} safety hooks enabled ${c.dim}(core.hooksPath)${c.reset}`)
+    result.updated.push('Git safety hooks enabled')
+  } catch {
+    result.warnings.push('Could not enable git safety hooks: git -C ~/Data config core.hooksPath .datacore/githooks')
+  }
+}
+
 /** Where we install when npm's global prefix is not writable (see init.ts). */
 export const FALLBACK_NPM_PREFIX = join(homeDir(), '.datacore', 'npm')
 
@@ -92,6 +111,10 @@ export function resolveBinary(cmd: string): string | null {
   } catch { /* npm not answering — fall through */ }
   // The fallback is installed with `-g --prefix`, so it has the same layout.
   candidates.push(...npmBinCandidates(FALLBACK_NPM_PREFIX, cmd))
+  // PLUR's own installer puts a stable launcher here (`plur init`), which is
+  // what its configs point at. Without it an install with a working PLUR
+  // reported plur-mcp as missing and wrote an entry naming a bare command.
+  candidates.push(join(homeDir(), '.plur', 'bin', cmd))
 
   for (const c of candidates) {
     if (existsSync(c)) return c
@@ -161,6 +184,25 @@ function updateRepos(
   }
 
   const pullResults = pullAll({ stream: false })
+
+  // A forked install's `origin` is the user's own fork, which GitHub never
+  // syncs, so the pull above brings in nothing from upstream. Merge upstream
+  // explicitly; an install cloned straight from upstream has no `upstream`
+  // remote and is fully served by the pull.
+  const up = mergeUpstream(DATA_DIR())
+  if (up.status === 'merged') {
+    if (isTTY) console.log(`  ${c.green}✓${c.reset} Data ${c.dim}(merged latest from datacore-one/datacore${up.pushed ? ', pushed to your fork' : ''})${c.reset}`)
+    result.updated.push('Repo: Data (merged upstream)')
+    if (!up.pushed && up.detail) result.warnings.push(up.detail)
+  } else if (up.status === 'dirty') {
+    if (isTTY) console.log(`  ${c.yellow}⚠${c.reset} Data ${c.dim}(not updated from upstream: uncommitted changes)${c.reset}`)
+    result.warnings.push(`Data not updated from upstream: ${up.detail}`)
+  } else if (up.status === 'conflict') {
+    if (isTTY) console.log(`  ${c.yellow}⚠${c.reset} Data ${c.dim}(upstream conflicts with your changes — nothing was changed)${c.reset}`)
+    result.warnings.push(`Data not updated from upstream: your changes conflict in ${up.files!.join(', ')}. Nothing was changed; resolve with: git -C ~/Data merge upstream/main`)
+  } else if (up.status === 'failed') {
+    result.warnings.push(`Data not updated from upstream: ${up.detail}`)
+  }
 
   for (const r of pullResults) {
     if (r.success) {
@@ -292,6 +334,10 @@ const MCP_BINARIES: Record<string, string> = {
   datacore: 'datacore-mcp',
   plur: 'plur-mcp',
 }
+const MCP_PACKAGE: Record<string, string> = {
+  datacore: '@datacore-one/mcp',
+  plur: '@plur-ai/mcp',
+}
 
 /**
  * The MCP entry for a server, preferring an ABSOLUTE path.
@@ -306,9 +352,47 @@ const MCP_BINARIES: Record<string, string> = {
  * An absolute path is immune to whatever PATH the MCP client happens to run
  * with, which is not the same PATH as the shell that ran the installer.
  */
-function mcpEntry(name: string): { command: string } {
+function mcpEntry(name: string): McpEntry {
   const bin = MCP_BINARIES[name]!
+  if (process.platform === 'win32') {
+    // The resolved "binary" is an npm .cmd shim, which MCP clients spawning
+    // without a shell cannot launch. Run node on the package's script.
+    const prefixes: string[] = [FALLBACK_NPM_PREFIX]
+    try {
+      const p = execFileSync('npm', ['config', 'get', 'prefix'], { stdio: 'pipe' }).toString().trim()
+      if (p && p !== 'undefined') prefixes.unshift(p)
+    } catch { /* fall back to our own prefix */ }
+    for (const prefix of prefixes) {
+      const script = windowsScriptFor(prefix, MCP_PACKAGE[name]!, bin)
+      if (script && existsSync(script)) return windowsMcpEntry(process.execPath, script)
+    }
+  }
   return { command: resolveBinary(bin) ?? bin }
+}
+
+/** Both server entries, as every harness should launch them. */
+export function mcpServerEntries(): Record<string, McpEntry> {
+  return Object.fromEntries(Object.keys(MCP_BINARIES).map((n) => [n, mcpEntry(n)]))
+}
+
+/**
+ * Codex, Antigravity, Gemini CLI, Windsurf and Cursor — whichever are
+ * installed. Claude Code and Claude Desktop keep their own writers above.
+ */
+export function configureOtherHarnesses(isTTY: boolean, result: { updated: string[]; warnings: string[]; alreadyCurrent: string[] }): void {
+  const r = wireHarnesses(mcpServerEntries(), DATA_DIR(), { skip: ['claude-desktop'] })
+  for (const h of r.configured) {
+    if (isTTY) console.log(`  ${c.green}✓${c.reset} ${h} configured`)
+    result.updated.push(`MCP configured for ${h}`)
+  }
+  for (const h of r.alreadyCurrent) {
+    if (isTTY) console.log(`  ${c.green}✓${c.reset} ${h} ${c.dim}(already configured)${c.reset}`)
+    result.alreadyCurrent.push(`MCP: ${h}`)
+  }
+  for (const w of r.warnings) {
+    if (isTTY) console.log(`  ${c.yellow}⚠${c.reset} ${w}`)
+    result.warnings.push(w)
+  }
 }
 
 /** Add any missing server to `servers`. Returns the names actually added. */
@@ -335,11 +419,10 @@ export function unresolvableMcpServers(): string[] {
 type McpTarget = 'code' | 'desktop' | 'both'
 
 function detectClaudeDesktopConfigDir(): string | null {
-  const home = homeDir()
-  const paths = [
-    join(home, 'Library', 'Application Support', 'Claude'), // macOS
-    join(home, '.config', 'claude'),                         // Linux
-  ]
+  // One source of truth for where each harness lives (this list had no
+  // Windows entry, so Claude Desktop was never configured there).
+  const desktop = harnessConfigs(homeDir(), process.platform, process.env).find((h) => h.name === 'claude-desktop')!
+  const paths = [desktop.detect, join(homeDir(), '.config', 'claude')]
   for (const dir of paths) {
     if (existsSync(dir)) return dir
   }
@@ -652,6 +735,10 @@ export async function updateDatacore(options: UpdateOptions = {}): Promise<Updat
   // Step 3: Dependencies (MCP server, .datacore/venv, module tool runtime)
   if (!skipDeps) {
     upgradeDependencies(platform, isTTY, result)
+    // Installed is not the same as current: upgrade the servers when npm is ahead.
+    const mcp = await upgradeMcpPackages((bin) => commandExists(bin) ? getVersionString(bin, '--version') : undefined, isTTY)
+    for (const u of mcp.upgraded) result.updated.push(u)
+    for (const f of mcp.failed) result.warnings.push(`Could not upgrade ${f}`)
     const venv = ensureDatacoreVenv(DATA_DIR())
     // An error, not a warning: without it the MCP server cannot start.
     if (venv.python) result.updated.push('Python dependencies (.datacore/venv)')
@@ -661,8 +748,13 @@ export async function updateDatacore(options: UpdateOptions = {}): Promise<Updat
     if (moduleWarnings.length === 0) result.updated.push('Module tool runtime (.datacore/modules)')
   }
 
-  // Step 4: MCP configuration
+  // Step 4: MCP configuration — Claude, then every other installed harness
   await upgradeMcpConfig(isTTY, interactive, result)
+  configureOtherHarnesses(isTTY, result)
+
+  // Installs made before 2.3.0 never had core.hooksPath set, so none of the
+  // commit and push guards ran for them. Update is the only command they run.
+  ensureSafetyHooks(isTTY, result)
 
   // Step 5: Ensure runtime directories
   upgradeDirectories(result)

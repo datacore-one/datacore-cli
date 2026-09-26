@@ -12,7 +12,9 @@ import { listSpaces } from './space'
 import { dataDir, datacoreLib } from './paths'
 import { findPython } from './python'
 
-const DATA_DIR = dataDir()
+// Resolved per call, like upgrade.ts: freezing it at import made the tests
+// read whichever installation the first importer happened to see.
+const DATA_DIR = () => dataDir()
 
 /**
  * Locate the ledger transport, or null on an installation that predates it.
@@ -22,7 +24,7 @@ const DATA_DIR = dataDir()
 function findLedgerTransport(): { python: string; script: string } | null {
   const script = join(datacoreLib(), 'ledger_transport.py')
   if (!existsSync(script)) return null
-  const python = findPython(DATA_DIR)
+  const python = findPython(DATA_DIR())
   if (!python) return null
   return { python, script }
 }
@@ -283,8 +285,8 @@ function getGitRepos(): Array<{ path: string; name: string }> {
   const repos: Array<{ path: string; name: string }> = []
 
   // Data root
-  if (isGitRepo(DATA_DIR)) {
-    repos.push({ path: DATA_DIR, name: 'Data' })
+  if (isGitRepo(DATA_DIR())) {
+    repos.push({ path: DATA_DIR(), name: 'Data' })
   }
 
   // All spaces with git

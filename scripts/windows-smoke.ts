@@ -34,5 +34,16 @@ check('resolveBinary(npm) resolves', resolveBinary('npm') !== null, resolveBinar
 check('homeDir() is absolute', /^[A-Za-z]:\\/.test(homeDir()), homeDir())
 check('findPython() finds an interpreter', findPython() !== null, findPython())
 
+// The exact step that failed for the first Windows user: an install command
+// run through the shell, then the installed binary found. CI only — it
+// installs a global package.
+if (process.env.CI) {
+  let installErr = ''
+  try { runShell('npm install -g @plur-ai/mcp', { stdio: 'inherit', timeout: 300000 }) } catch (e) { installErr = (e as Error).message }
+  check('runShell(npm install -g ...) succeeds', installErr === '', installErr || 'installed')
+  const plur = resolveBinary('plur-mcp')
+  check('the installed binary is found afterwards', plur !== null, plur)
+}
+
 if (failed) { console.log(`\n${failed} check(s) failed`); process.exit(1) }
 console.log('\nall Windows checks passed')

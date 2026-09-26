@@ -22,6 +22,7 @@ import { listModules, installModule, updateModules, removeModule } from './lib/m
 import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSnapshot, lockFileExists } from './lib/snapshot'
 import * as app from './lib/app'
 import { VERSION } from './version'
+import { maybeNotifyUpdate, selfUpdate } from './lib/selfupdate'
 import { homeDir } from './lib/exec'
 
 
@@ -142,6 +143,16 @@ async function handleMeta(
         }
         process.exitCode = 1
         break
+      }
+
+      // Update the CLI first and let the new version do the rest: otherwise the
+      // update logic that runs is always the one being replaced.
+      if (flags['skip-self-update'] !== true) {
+        const code = await selfUpdate(VERSION, process.argv.slice(2), format === 'human')
+        if (code !== null) {
+          process.exitCode = code
+          break
+        }
       }
 
       const updateResult = await updateDatacore({
@@ -1220,6 +1231,9 @@ async function main() {
     switch (parsed.type) {
       case 'meta':
         await handleMeta(parsed.command, parsed.args, parsed.flags, format)
+        // `update` just did the check itself; everything else gets the one-line
+        // notice (human terminals only, at most one registry request a day).
+        if (format === 'human' && parsed.command !== 'update') await maybeNotifyUpdate(VERSION)
         break
 
       case 'resource':

@@ -25,6 +25,16 @@ jobs:
         run: |
           Remove-Item Env:HOME -ErrorAction SilentlyContinue
           bun scripts/windows-smoke.ts
+      - name: Harnesses get working MCP entries (Codex, Antigravity) in a throwaway home
+        shell: pwsh
+        run: |
+          $t = Join-Path $env:RUNNER_TEMP 'home'
+          New-Item -ItemType Directory -Force $t | Out-Null
+          $env:USERPROFILE = $t
+          $env:DATACORE_ROOT = Join-Path $t 'Data'
+          Remove-Item Env:HOME -ErrorAction SilentlyContinue
+          bun scripts/harness-smoke.ts
+          Get-Content (Join-Path $t '.codex\config.toml')
       - name: Built CLI detects installed tools (HOME unset, as on a user's machine)
         shell: pwsh
         run: |

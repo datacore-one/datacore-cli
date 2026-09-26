@@ -976,6 +976,10 @@ function configureMcpServer(isTTY: boolean | undefined, result: InitResult): voi
 
   configureMcpForDesktop(!!isTTY, updateResult)
   configureMcpForCode(!!isTTY, updateResult)
+  // Every other harness on the machine: Cursor, Codex, Antigravity, Gemini
+  // CLI, Windsurf. A Cursor user's install used to finish with no tools.
+  const { configureOtherHarnesses } = require('./upgrade')
+  configureOtherHarnesses(!!isTTY, updateResult)
 
   // Transfer warnings to init result
   for (const w of updateResult.warnings) {

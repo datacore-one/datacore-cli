@@ -474,6 +474,55 @@ function localiseHookPaths(isTTY: boolean | undefined, result: InitResult): void
   }
 }
 
+/** PLUR's prompt-time recall: the command a UserPromptSubmit hook runs. */
+const RECALL_HOOK = /hook-inject|plur_inject|plur-hook\s+hook-(?:inject|prompt)|plur\s+hook\s+inject/
+
+type HookGroup = { matcher?: string; hooks?: Array<{ type?: string; command?: string; timeout?: number; async?: boolean }> }
+
+/** Does this settings file run PLUR recall on every prompt? */
+function recallHookWired(settingsPath: string): boolean {
+  try {
+    const s = JSON.parse(readFileSync(settingsPath, 'utf-8')) as { hooks?: Record<string, HookGroup[]> }
+    return (s.hooks?.UserPromptSubmit ?? []).some((g) => (g.hooks ?? []).some((h) => RECALL_HOOK.test(String(h.command ?? ''))))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Automatic recall is part of memory, not an extra step (MEM-69).
+ *
+ * Registering the PLUR MCP server only exposes tools; what puts relevant
+ * engrams in front of the model on every prompt is a UserPromptSubmit hook.
+ * The shipped settings carry it (plur_inject_wrapper.py --unless-user-hook,
+ * which stands down when `plur init` already wired one at user level); an
+ * installation whose settings predate that gets it added here, so no new user
+ * is left to run `plur init` by hand.
+ */
+function ensureRecallHook(isTTY: boolean | undefined, result: InitResult): void {
+  const settingsPath = join(DATACORE_DIR, 'settings.json')
+  if (!existsSync(settingsPath) || recallHookWired(settingsPath)) return
+  try {
+    const s = JSON.parse(readFileSync(settingsPath, 'utf-8')) as { hooks?: Record<string, HookGroup[]> }
+    s.hooks = s.hooks ?? {}
+    const groups = s.hooks.UserPromptSubmit ?? (s.hooks.UserPromptSubmit = [])
+    if (groups.length === 0) groups.push({ hooks: [] })
+    const group = groups[0]
+    group.hooks = group.hooks ?? []
+    group.hooks.push({
+      type: 'command',
+      command: `python3 ${DATA_DIR}/.datacore/lib/hooks/plur_inject_wrapper.py --unless-user-hook`,
+      timeout: 90,
+      async: true,
+    })
+    writeFileSync(settingsPath, JSON.stringify(s, null, 2) + '\n')
+    if (isTTY) console.log(`  ${c.green}✓${c.reset} memory recall on every prompt ${c.dim}(UserPromptSubmit)${c.reset}`)
+    result.configured.push('PLUR prompt-time recall hook')
+  } catch (err) {
+    result.warnings.push(`Could not wire PLUR prompt-time recall: ${(err as Error).message}`)
+  }
+}
+
 /** Is core.hooksPath pointed at the repo's own hooks? */
 function gitHooksConfigured(): boolean {
   return !!runArgsOutput('git', ['-C', DATA_DIR, 'config', 'core.hooksPath'])
@@ -1681,6 +1730,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     }
 
     localiseHookPaths(isTTY, result)
+    ensureRecallHook(isTTY, result)
 
     op.completeStep('clone_repo')
 
@@ -2695,7 +2745,8 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         cosName: cosPersonaName(),
         spaces: allSpaces.map(s => s.name),
         modules: listModules().map(m => m.name),
-        memoryConnected: mcpConfigured('plur'),
+        // Connected means recall happens, not only that the server is registered.
+        memoryConnected: mcpConfigured('plur') && recallHookWired(join(DATACORE_DIR, 'settings.json')),
         hooksArmed: gitHooksConfigured(),
       }, null, 2))
     } catch (err) {

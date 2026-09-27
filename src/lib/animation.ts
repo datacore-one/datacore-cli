@@ -2,6 +2,8 @@
  * Terminal animations for that hacker aesthetic.
  */
 
+import { richOutput } from './output'
+
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const MATRIX_CHARS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789'
 
@@ -236,9 +238,8 @@ export async function completionSequence(
   opts: { enabled?: boolean } = {},
 ): Promise<void> {
   const enabled = opts.enabled ?? (
-    !!process.stdout.isTTY
+    richOutput(!!process.stdout.isTTY)
     && !process.env.DATACORE_NO_ANIMATION
-    && !process.env.CI
   )
 
   if (!enabled) {

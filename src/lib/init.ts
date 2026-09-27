@@ -20,6 +20,7 @@
 import { existsSync, mkdirSync, writeFileSync, symlinkSync, copyFileSync, readdirSync, readFileSync, statSync, cpSync } from 'fs'
 import { join, basename } from 'path'
 import { execFileSync, homeDir, npmBinCandidates, refreshWindowsPath, runShell } from './exec'
+import { agentDriving, richOutput } from './output'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { AVAILABLE_MODULES, installModule, listModules, ModuleDependencyError } from './module'
@@ -1156,7 +1157,8 @@ export function isInitialized(): boolean {
 export async function initDatacore(options: InitOptions = {}): Promise<InitResult> {
   const { nonInteractive = false, skipChecks = false, stream = false, verbose = false, force = false } = options
   const answers = options.answers
-  const isTTY = stream && process.stdout.isTTY
+  // Not merely isTTY: an agent's terminal is a real pseudo-terminal too. See output.ts.
+  const isTTY = stream && richOutput(!!process.stdout.isTTY)
 
   // Answers supplied => deliberately non-interactive, and legitimately so.
   const interactive = isTTY && !nonInteractive && !answers
@@ -1179,6 +1181,20 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
   // precisely what an agent does when it pipes output, so the quiet path was
   // the likeliest one in practice. Taking the defaults is fine; doing it
   // without anyone choosing to is not, so it now has to be asked for.
+  const agent = agentDriving()
+  if (!isTTY && !options.nonInteractive && !answers && agent) {
+    // The wizard's prompts cannot be answered by an agent, and its output is
+    // what the agent would store. Send it to the path built for it.
+    result.errors.push(
+      `${agent}'s agent is running this command, and it cannot answer the setup ` +
+      'wizard. Ask the user the questions yourself: run `datacore init ' +
+      '--print-questions`, ask them in conversation, write their answers to ' +
+      'answers.json, then run `datacore init --answers answers.json`. Do not use ' +
+      '--yes unless the user asked for every default. ' +
+      '(https://datacore.one/install.txt)',
+    )
+    return result
+  }
   if (!isTTY && !options.nonInteractive && !answers) {
     result.errors.push(
       'Not a terminal, so every prompt would be skipped and all defaults taken ' +

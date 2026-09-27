@@ -23,6 +23,7 @@ import { createSnapshot, saveSnapshot, loadSnapshot, diffSnapshot, restoreFromSn
 import * as app from './lib/app'
 import { VERSION } from './version'
 import { maybeNotifyUpdate, selfUpdate } from './lib/selfupdate'
+import { richOutput } from './lib/output'
 import { homeDir } from './lib/exec'
 
 
@@ -148,7 +149,7 @@ async function handleMeta(
       // Update the CLI first and let the new version do the rest: otherwise the
       // update logic that runs is always the one being replaced.
       if (flags['skip-self-update'] !== true) {
-        const code = await selfUpdate(VERSION, process.argv.slice(2), format === 'human')
+        const code = await selfUpdate(VERSION, process.argv.slice(2), format === 'human' && richOutput(!!process.stdout.isTTY))
         if (code !== null) {
           process.exitCode = code
           break
@@ -412,7 +413,7 @@ async function handleResource(
           const visibility = (flags.visibility as string) === 'public' ? 'public' : 'private'
           let remote = flags.remote as string | undefined
           let remoteUrl = flags.url as string | undefined
-          const interactive = process.stdin.isTTY === true && format !== 'json' && flags.yes !== true
+          const interactive = richOutput(process.stdin.isTTY === true) && format !== 'json' && flags.yes !== true
 
           let space
           try {

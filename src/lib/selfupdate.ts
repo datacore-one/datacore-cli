@@ -15,6 +15,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { execFileSync, homeDir, runShell } from './exec'
+import { richOutput } from './output'
 
 // ─── Versions ────────────────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ function checkStatePath(): string {
  * the 3 s fetch timeout (and only on the day it checks).
  */
 export async function maybeNotifyUpdate(current: string): Promise<void> {
-  if (!process.stdout.isTTY || process.env.CI || process.env.DATACORE_NO_UPDATE_CHECK) return
+  if (!richOutput(!!process.stdout.isTTY) || process.env.DATACORE_NO_UPDATE_CHECK) return
   try {
     const path = checkStatePath()
     let state: { checkedAt?: string; latest?: string } = {}

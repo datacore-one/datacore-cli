@@ -13,6 +13,7 @@ import { join } from 'path'
 import { execFileSync, homeDir, npmBinCandidates, runShell, which } from './exec'
 import { harnessConfigs, windowsMcpEntry, windowsScriptFor, wireHarnesses, type McpEntry } from './harness'
 import { mergeUpstream, upgradeMcpPackages } from './selfupdate'
+import { richOutput } from './output'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
 import { updateModules, listModules } from './module'
@@ -704,7 +705,7 @@ function upgradeSnapshot(
 
 export async function updateDatacore(options: UpdateOptions = {}): Promise<UpdateResult> {
   const { stream = false, skipModules = false, skipDeps = false, yes = false } = options
-  const isTTY = stream && !!process.stdout.isTTY
+  const isTTY = stream && richOutput(!!process.stdout.isTTY)
   const interactive = isTTY && !yes
   const platform = detectPlatform()
 

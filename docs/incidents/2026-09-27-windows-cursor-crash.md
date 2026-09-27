@@ -4,6 +4,8 @@ Date: 2026-09-27. Status: open — cause not confirmed; waiting on facts from th
 
 ## What we know
 
+- The user's first log is from CLI 2.5.0; install.txt then pointed them at
+  `@latest` (2.6.0), which they may have run before the crash.
 - The user ran `datacore init` with CLI 2.5.0 on native Windows, apparently from
   Cursor's integrated terminal. Every tool in step 2 reported "Failed to install".
 - Later the user reported that Cursor crashed and has to be reinstalled.
@@ -62,6 +64,34 @@ the stray one inside the project; never `C:\Users\<user>\Data`).
 The old install.txt led with the interactive wizard. An agent running it in
 Cursor's terminal gets a live spinner and a prompt it cannot answer. That can
 hang the agent, not crash the application.
+
+## If the user ran 2.6.0 (the version install.txt now points at)
+
+2.6.0 installs into `C:\Users\<user>\Data`, not the current folder, and never
+creates `~` or a relative `Data`. What it does that touches Cursor at all:
+
+- When `%USERPROFILE%\.cursor` exists it runs `.datacore/adapters/cursor/install.py`,
+  which writes `C:\Users\<user>\Data\.cursor\mcp.json` and `hooks.json`. Both are
+  workspace files: inert unless that folder is opened in Cursor.
+- `hooks.json` runs a Python guard on every `preToolUse` and `beforeShellExecution`
+  (timeout 25 s, `failClosed: false`). A failing or slow guard slows the agent;
+  it cannot crash the application.
+- winget installs of git, Python, gh and Node LTS, only for tools that are
+  missing. These installers write their own program folders and PATH.
+
+Nothing in 2.6.0 writes to `%LOCALAPPDATA%\Programs\cursor`, `%APPDATA%\Cursor`
+or `~/.cursor/mcp.json`. It cannot corrupt a Cursor install.
+
+Windows defects found in the adapter while checking (none can crash Cursor; all
+make the Cursor wiring not work on Windows):
+- `hooks.json` builds `"{python} {hook.py}"` without quoting — breaks when the
+  username or install path contains a space.
+- `mcp.json` names `shutil.which("datacore-mcp")`, i.e. an npm `.cmd` shim, which
+  a client spawning without a shell cannot launch (the CLI's own entries run
+  `node.exe <script>` on Windows since 2.6.0; the adapter does not).
+- The venv interpreter is looked up at `venv/bin/python`; Windows uses
+  `venv\Scripts\python.exe` (it falls back to the running Python, so it works).
+- The PLUR hook is looked up as `~/.plur/bin/plur-hook` with no Windows extension.
 
 ## Fixed already
 

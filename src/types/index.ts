@@ -60,6 +60,8 @@ export interface LedgerCheck {
   name: string
   ok: boolean | null
   detail: string
+  /** How to fix it: every row that is not ok carries one (INS-4). */
+  fix?: string
 }
 
 export interface DoctorResult {
@@ -74,6 +76,9 @@ export interface DoctorResult {
   mcpConfig?: { claudeDesktop: boolean; claudeCode: boolean }
   codePermissions?: { enableAll: boolean; mcpAllowed: boolean }
   ledger?: LedgerCheck[]
+  /** The installation's own gaps (identity, principals, event logs, inbox, jobs),
+   *  from .datacore/lib/install_doctor.py. */
+  install?: LedgerCheck[]
 }
 
 export interface SpaceInfo {

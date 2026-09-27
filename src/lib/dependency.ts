@@ -354,6 +354,7 @@ function checkLedger(): LedgerCheck[] {
       // Naming the floor matters: macOS ships 3.9 as `python3`, so "install
       // Python" is the wrong instruction and sends people in a circle.
       detail: `no interpreter >= ${PYTHON_MIN_VERSION} found (macOS system python3 is 3.9 and cannot load the ledger) — set DATACORE_PYTHON`,
+      fix: `install Python >= ${PYTHON_MIN_VERSION} and set DATACORE_PYTHON to it`,
     })
     return checks
   }
@@ -365,6 +366,7 @@ function checkLedger(): LedgerCheck[] {
       name: 'ledger',
       ok: null,
       detail: 'not present in this installation (pre-ledger) — run: datacore update',
+      fix: 'datacore update',
     })
     return checks
   }
@@ -381,7 +383,12 @@ function checkLedger(): LedgerCheck[] {
   }
 
   if (spaces.length === 0) {
-    checks.push({ name: 'chains', ok: null, detail: 'no space carries an event log yet' })
+    checks.push({
+      name: 'chains',
+      ok: null,
+      detail: 'no space carries an event log yet',
+      fix: 'mkdir -p 0-personal/.datacore/events (and <space>/.datacore/events for each space)',
+    })
     return checks
   }
 
@@ -407,9 +414,15 @@ function checkLedger(): LedgerCheck[] {
       name: 'chains',
       ok: false,
       detail: `hash chain broken in ${broken.join(', ')} — do NOT publish; run: ledger_cli.py verify`,
+      fix: `python3 .datacore/lib/ledger_cli.py verify --space ${broken[0]}  (then follow .datacore/docs recovery)`,
     })
   } else if (unverifiable.length > 0 && unverifiable.length === spaces.length) {
-    checks.push({ name: 'chains', ok: null, detail: `could not verify ${unverifiable.join(', ')}` })
+    checks.push({
+      name: 'chains',
+      ok: null,
+      detail: `could not verify ${unverifiable.join(', ')}`,
+      fix: `python3 .datacore/lib/ledger_cli.py verify --space ${unverifiable[0]}  (read the error it prints)`,
+    })
   } else {
     const n = spaces.length - unverifiable.length
     checks.push({
@@ -425,10 +438,50 @@ function checkLedger(): LedgerCheck[] {
   checks.push(
     existsSync(transport)
       ? { name: 'transport', ok: true, detail: 'ledger_transport.py (merge, never rebase)' }
-      : { name: 'transport', ok: null, detail: 'absent — sync falls back to a plain merge pull' },
+      : { name: 'transport', ok: null, detail: 'absent — sync falls back to a plain merge pull', fix: 'datacore update' },
   )
 
   return checks
+}
+
+/**
+ * The installation's own gaps -- identity, principals, event logs, the
+ * personal inbox, jobs for machines this install does not declare -- from
+ * .datacore/lib/install_doctor.py, which owns those rules (INS-4). A doctor
+ * that could not run it says so, with a fix, instead of reporting nothing.
+ */
+function checkInstall(): LedgerCheck[] {
+  const root = resolveDataDir()
+  const script = join(root, '.datacore', 'lib', 'install_doctor.py')
+  if (!existsSync(script)) {
+    return [{ name: 'install', ok: null, detail: 'install_doctor.py not present', fix: 'datacore update' }]
+  }
+  const python = findPython(root)
+  if (!python) {
+    return [{
+      name: 'install', ok: null, detail: 'no Python to run the installation checks',
+      fix: `install Python >= ${PYTHON_MIN_VERSION} and set DATACORE_PYTHON to it`,
+    }]
+  }
+  let out = ''
+  try {
+    out = execFileSync(python, [script, '--root', root, '--json'], {
+      encoding: 'utf-8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err: unknown) {
+    // Exit 1 means "found gaps": its stdout is still the report.
+    out = String((err as { stdout?: string }).stdout ?? '')
+  }
+  try {
+    const parsed = JSON.parse(out.slice(out.indexOf('{'))) as { install?: LedgerCheck[] }
+    if (Array.isArray(parsed.install)) return parsed.install
+  } catch {
+    // fall through
+  }
+  return [{
+    name: 'install', ok: null, detail: 'the installation checks did not answer',
+    fix: `${python} ${script} --root ${root}  (and fix the error it prints)`,
+  }]
 }
 
 export function runDoctor(): DoctorResult {
@@ -440,6 +493,7 @@ export function runDoctor(): DoctorResult {
   const missingRecommended = dependencies.some(d => !d.required && !d.installed)
 
   const ledger = checkLedger()
+  const install = checkInstall()
 
   let status: DoctorResult['status'] = 'ready'
   if (missingRequired) status = 'missing_required'
@@ -462,5 +516,6 @@ export function runDoctor(): DoctorResult {
     mcpConfig: checkMcpConfig(),
     codePermissions: checkCodePermissions(),
     ledger,
+    install,
   }
 }

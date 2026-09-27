@@ -229,6 +229,14 @@ async function handleMeta(
           }
           console.log()
         }
+        if (result.install?.length) {
+          console.log('Installation:')
+          for (const c of result.install) {
+            console.log(`  ${c.ok === true ? '✓' : c.ok === false ? '✗' : '?'} ${c.name}: ${c.detail}`)
+            if (c.ok !== true && c.fix) console.log(`      Fix: ${c.fix}`)
+          }
+          console.log()
+        }
 
         if (result.status === 'ready') {
           success('System ready for Datacore')

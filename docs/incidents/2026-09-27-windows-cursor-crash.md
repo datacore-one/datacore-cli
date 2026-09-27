@@ -1,6 +1,27 @@
 # Windows user: Cursor "crashed, has to be reinstalled" after a Datacore install attempt
 
-Date: 2026-09-27. Status: open — cause not confirmed; waiting on facts from the user.
+Date: 2026-09-27. Status: cause identified 2026-09-27 — Cursor's own state database grew too large; our install output is a plausible contributor.
+
+## Update 2026-09-27: the actual error
+
+Screenshot from the user: Cursor "Storage Error — Cursor was unable to open local
+storage", path `%APPDATA%\Cursor\User\globalStorage\state.vscdb`, and the file was
+reported to be huge.
+
+- The home folder and AppData are intact, so hypothesis 1 below (a `~` deletion)
+  did not happen.
+- `state.vscdb` is Cursor's SQLite store for global state, including agent chat
+  history. When it grows very large Cursor fails to open it and shows exactly this
+  dialog. It is a known Cursor failure. No version of the CLI writes to that file.
+- Plausible contribution from us: an agent-driven install keeps the terminal
+  output in the chat history stored in that file. Our installer streamed winget
+  and npm progress output, spinner redraws and a 30-second "still installing"
+  ticker. Not proven without the file's contents.
+- Recovery needs no reinstall: close Cursor, rename `state.vscdb` (and
+  `state.vscdb.backup`) aside, restart. Cost: Cursor's chat history and some UI
+  state; settings.json, keybindings and extensions are separate files.
+- Follow-up on our side: when stdout is not a TTY, do not stream installer
+  progress or animate; print one line per step.
 
 ## What we know
 

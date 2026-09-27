@@ -22,7 +22,7 @@ import { join, basename } from 'path'
 import { execFileSync, homeDir, npmBinCandidates, refreshWindowsPath, runShell } from './exec'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
-import { AVAILABLE_MODULES, installModule, listModules } from './module'
+import { AVAILABLE_MODULES, installModule, listModules, ModuleDependencyError } from './module'
 import { listSpaces } from './space'
 import { invokeAgent } from './agent'
 import { FALLBACK_NPM_PREFIX, resolveBinary, unresolvableMcpServers } from './upgrade'
@@ -2127,26 +2127,22 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
 
       try {
         await sleep(100)
-        const info = installModule(mod.repo)
+        // installModule runs the module's own dependency install and throws
+        // ModuleDependencyError when it fails.
+        installModule(mod.repo)
         result.modulesInstalled.push(mod.name)
         installCount++
-
-        // Run post-install dependencies
-        const postInstall = runModulePostInstall(info.path)
-        if (postInstall.ran && postInstall.success) {
-          spinner?.succeed(`${mod.name} - dependencies installed (${postInstall.type})`)
-        } else if (postInstall.ran && !postInstall.success) {
-          spinner?.succeed(`${mod.name}`)
-          if (isTTY) console.log(`    ${c.yellow}⚠${c.reset} ${c.dim}Dependency install failed (${postInstall.type})${c.reset}`)
-          // Into the result too: a printed-only warning left the JSON saying
-          // success with no warnings while four modules had no dependencies.
-          result.warnings.push(`${mod.name}: ${postInstall.type} dependencies failed to install`)
-        } else {
-          spinner?.succeed(mod.name)
-        }
+        spinner?.succeed(mod.name)
       } catch (err) {
         spinner?.fail(`${mod.name} - ${(err as Error).message}`)
-        result.warnings.push(`Module ${mod.name} failed to install: ${(err as Error).message}`)
+        // ERRORS, not warnings (MEM-68, ENG-2026-09-23-048): initSucceeded
+        // ignores warnings, so a module left broken used to end in "success".
+        if (err instanceof ModuleDependencyError) {
+          result.modulesInstalled.push(mod.name)
+          result.errors.push(`Module ${mod.name} is broken: ${err.message}`)
+        } else {
+          result.errors.push(`Module ${mod.name} failed to install: ${(err as Error).message}`)
+        }
       }
     }
 

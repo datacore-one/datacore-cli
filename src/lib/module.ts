@@ -331,13 +331,23 @@ export function installModule(source: string): ModuleInfo {
   // immediately after a clean `module install`.
   const post = runModulePostInstall(modulePath)
   if (post.ran && !post.success) {
-    // Say so. The symptom otherwise appears much later and somewhere else.
-    console.warn(`  warning: ${info.name} installed, but its ${post.type} dependencies failed.`)
-    console.warn(`  Retry with: cd ${modulePath} && ${post.type === 'pip'
+    // A FAILURE, not a warning (MEM-68). The module is on disk but its code
+    // cannot import what it needs, so the install did not succeed; exiting 0
+    // here told every caller -- `module install --json`, `init` -- that it had.
+    // The clone is kept so the retry below needs no network for the module.
+    throw new ModuleDependencyError(info, post.type ?? 'unknown', `cd ${modulePath} && ${post.type === 'pip'
       ? '<Data>/.datacore/venv/bin/python -m pip install -r requirements.txt' : 'npm install'}`)
   }
 
   return info
+}
+
+/** The module was cloned but its dependencies failed to install: it is broken. */
+export class ModuleDependencyError extends Error {
+  constructor(public readonly module: ModuleInfo, public readonly depType: string, public readonly retry: string) {
+    super(`${module.name} installed, but its ${depType} dependencies failed — the module is broken until they install. Retry with: ${retry}`)
+    this.name = 'ModuleDependencyError'
+  }
 }
 
 /**

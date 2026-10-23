@@ -12,6 +12,7 @@ import { detectPlatform, getInstallCommand, getPlatformInfo, type Platform } fro
 import { dataDir as resolveDataDir } from './paths'
 import { classifyVerifyFailure, findPython, PYTHON_MIN_VERSION } from './python'
 import { listSpaces } from './space'
+import { harnessConfigs } from './harness'
 
 function commandExists(cmd: string): boolean {
   // Same lookup init uses, so doctor and the installer cannot disagree about
@@ -249,32 +250,39 @@ export function checkCodePermissions(): { enableAll: boolean; mcpAllowed: boolea
   return { enableAll, mcpAllowed }
 }
 
-export function checkMcpConfig(): { claudeDesktop: boolean; claudeCode: boolean } {
-  // Check Claude Desktop config
-  const home = homeDir()
-  const desktopPaths = [
-    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'), // macOS
-    join(home, '.config', 'claude', 'claude_desktop_config.json'), // Linux
-  ]
+/**
+ * Is Datacore wired into Claude Desktop and Claude Code?
+ *
+ * `claudeDesktop` is null when the question does not apply: there is no
+ * Claude Desktop for Linux, and elsewhere the app may simply not be installed.
+ * Reporting "✗ Claude Desktop config" on a headless server sent people
+ * looking for a problem that does not exist.
+ */
+export function checkMcpConfig(opts: { home?: string; platform?: NodeJS.Platform; dataDir?: string } = {}):
+  { claudeDesktop: boolean | null; claudeCode: boolean } {
+  const home = opts.home ?? homeDir()
+  const platform = opts.platform ?? process.platform
+  const data = opts.dataDir ?? resolveDataDir()
 
-  let claudeDesktop = false
-  for (const p of desktopPaths) {
-    try {
-      if (existsSync(p)) {
-        const content = JSON.parse(readFileSync(p, 'utf-8'))
-        if (content?.mcpServers?.datacore) {
-          claudeDesktop = true
-          break
+  let claudeDesktop: boolean | null = null
+  if (platform !== 'linux') {
+    const desktop = harnessConfigs(home, platform, process.env).find((h) => h.name === 'claude-desktop')!
+    if (existsSync(desktop.detect)) {
+      claudeDesktop = false
+      try {
+        if (existsSync(desktop.path)) {
+          const content = JSON.parse(readFileSync(desktop.path, 'utf-8'))
+          if (content?.mcpServers?.datacore) claudeDesktop = true
         }
+      } catch {
+        // Ignore parse errors
       }
-    } catch {
-      // Ignore parse errors
     }
   }
 
-  // Check Claude Code .mcp.json
+  // Check Claude Code .mcp.json -- in the data dir, which is not always ~/Data.
   let claudeCode = false
-  const mcpJsonPath = join(home, 'Data', '.mcp.json')
+  const mcpJsonPath = join(data, '.mcp.json')
   try {
     if (existsSync(mcpJsonPath)) {
       const content = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'))
@@ -287,6 +295,20 @@ export function checkMcpConfig(): { claudeDesktop: boolean; claudeCode: boolean 
   }
 
   return { claudeDesktop, claudeCode }
+}
+
+/**
+ * The closing line of `datacore doctor`. Every non-ready status used to print
+ * "Missing recommended dependencies" -- including a degraded ledger, with
+ * every dependency present.
+ */
+export function doctorVerdict(status: DoctorResult['status']): { level: 'ok' | 'warn' | 'error'; message: string } {
+  switch (status) {
+    case 'ready': return { level: 'ok', message: 'System ready for Datacore' }
+    case 'missing_required': return { level: 'error', message: 'Missing required dependencies' }
+    case 'missing_recommended': return { level: 'warn', message: 'Missing recommended dependencies' }
+    case 'ledger_degraded': return { level: 'warn', message: 'Ledger checks failed (see Ledger above)' }
+  }
 }
 
 export function checkDependencies(): DependencyCheck[] {

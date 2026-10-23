@@ -12,8 +12,9 @@
  * tools instead of 45+.
  */
 import { execFileSync } from './exec'
-import { existsSync, rmSync } from 'fs'
+import { existsSync, rmSync, readFileSync, writeFileSync, statSync, mkdtempSync } from 'fs'
 import { join } from 'path'
+import { tmpdir } from 'os'
 
 export type Runner = (cmd: string, args: string[], opts?: { cwd?: string; timeout?: number }) => { ok: boolean; stderr?: string }
 
@@ -73,7 +74,11 @@ export function ensureDatacoreVenv(dataDir: string, run: Runner = defaultRun,
       return { python: null, warnings: [`Could not create ${venvDir}: no Python >= 3.10 found. Install one (e.g. brew install python@3.12), then run: datacore update`] }
     }
     const made = run(base, ['-m', 'venv', '--system-site-packages', venvDir], { timeout: 120000 })
-    if (!made.ok) return { python: null, warnings: [`Could not create ${venvDir} with ${base}: ${made.stderr ?? ''}`.trim()] }
+    if (!made.ok) {
+      const hint = /ensurepip|venv/i.test(made.stderr ?? '')
+        ? ` Fix: ${venvInstallHint(process.platform, versionOf(base), readOsRelease())}, then run: datacore update` : ''
+      return { python: null, warnings: [`Could not create ${venvDir} with ${base}: ${made.stderr ?? ''}`.trim() + hint] }
+    }
   }
   const req = join(dataDir, '.datacore', 'lib', 'requirements.txt')
   if (existsSync(req)) {
@@ -85,13 +90,89 @@ export function ensureDatacoreVenv(dataDir: string, run: Runner = defaultRun,
 
 export function ensureModuleDeps(dataDir: string, run: Runner = defaultRun): string[] {
   const modulesDir = join(dataDir, '.datacore', 'modules')
-  if (!existsSync(join(modulesDir, 'package.json'))) return []
+  const pkg = join(modulesDir, 'package.json')
+  if (!existsSync(pkg)) return []
+  const lock = join(modulesDir, 'package-lock.json')
+  const hasLock = existsSync(lock)
+
+  // Nothing changed since the last install: skip it (and its network round).
+  // npm writes node_modules/.package-lock.json on every install.
+  const hidden = join(modulesDir, 'node_modules', '.package-lock.json')
+  try {
+    if (existsSync(hidden)) {
+      const installed = statSync(hidden).mtimeMs
+      if (installed >= statSync(pkg).mtimeMs && (!hasLock || installed >= statSync(lock).mtimeMs)) return []
+    }
+  } catch { /* fall through to an install */ }
+
+  // The lock file is TRACKED by the root repo. `npm install` rewrote it on
+  // every update, leaving the root dirty, which then blocks the next merge
+  // from upstream. `npm ci` installs from the lock and never writes it; and
+  // whatever runs, the lock is put back byte for byte.
+  const before = hasLock ? readFileSync(lock) : null
   // --ignore-scripts: module tools import only @datacore-one/mcp/runtime (zod,
   // js-yaml, interpreter selection). The package's native sqlite build is never
   // loaded from here, and a host without a prebuilt binary or toolchain would
   // otherwise fail the whole install and lose every module tool.
-  const r = run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: modulesDir, timeout: 300000 })
+  const flags = ['--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund']
+  let r = hasLock ? run('npm', ['ci', ...flags], { cwd: modulesDir, timeout: 300000 }) : { ok: false }
+  if (!r.ok) r = run('npm', ['install', ...flags], { cwd: modulesDir, timeout: 300000 })
+  if (before) {
+    try {
+      if (!readFileSync(lock).equals(before)) writeFileSync(lock, before)
+    } catch { /* a lock we cannot restore is git's to show, not ours to hide */ }
+  }
   return r.ok ? [] : [`npm install in ${modulesDir} failed, so module tools will not load: ${r.stderr ?? ''}`.trim()]
+}
+
+/**
+ * The command that makes `python3 -m venv` work on this machine.
+ *
+ * Debian and Ubuntu split venv's ensurepip into a separate package named after
+ * the exact Python version (python3.12-venv on Ubuntu 24.04); without it
+ * `python3 -m venv` fails and Datacore's MCP server cannot start.
+ */
+export function venvInstallHint(platform: NodeJS.Platform, version: [number, number] | null, osRelease = ''): string {
+  const v = version ? `${version[0]}.${version[1]}` : '3'
+  if (platform === 'darwin') return `brew install python@${version && version[1] >= 10 ? v : '3.12'}`
+  if (platform === 'win32') return 'winget install --id Python.Python.3.12 --exact'
+  if (/^(ID|ID_LIKE)=.*\b(debian|ubuntu)\b/m.test(osRelease)) {
+    return version && version[1] >= 10 ? `sudo apt install python${v}-venv` : 'sudo apt install python3 python3-venv'
+  }
+  return `install Python >= 3.10 with its venv module (your distribution's python${v === '3' ? '3' : v}-venv or python3 package)`
+}
+
+function readOsRelease(): string {
+  try { return readFileSync('/etc/os-release', 'utf-8') } catch { return '' }
+}
+
+/**
+ * Can this machine build Datacore's virtual environment? Checked by init
+ * BEFORE anything relies on it, by building a throwaway venv the same way
+ * ensureDatacoreVenv will (with pip: missing ensurepip is the usual failure,
+ * and `import venv` alone succeeds without it).
+ */
+export function checkVenvSupport(run: Runner = defaultRun, versionOf: VersionOf = defaultVersionOf,
+  platform: NodeJS.Platform = process.platform, osRelease: string = readOsRelease()):
+  { ok: boolean; python?: string; version?: [number, number]; error?: string; fix?: string } {
+  const base = BASE_CANDIDATES.find(bin => atLeast310(versionOf(bin)))
+  if (!base) {
+    return { ok: false, error: 'no Python >= 3.10 found', fix: venvInstallHint(platform, null, osRelease) }
+  }
+  const version = versionOf(base) ?? undefined
+  let probe = ''
+  try {
+    probe = mkdtempSync(join(tmpdir(), 'datacore-venv-check-'))
+    const made = run(base, ['-m', 'venv', join(probe, 'venv')], { timeout: 120000 })
+    if (made.ok) return { ok: true, python: base, version }
+    return {
+      ok: false, python: base, version,
+      error: (made.stderr || 'python -m venv failed').split('\n').find(l => l.trim()) ?? 'python -m venv failed',
+      fix: venvInstallHint(platform, version ?? null, osRelease),
+    }
+  } finally {
+    if (probe) rmSync(probe, { recursive: true, force: true })
+  }
 }
 
 /**

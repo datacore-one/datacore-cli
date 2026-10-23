@@ -27,7 +27,7 @@ import { AVAILABLE_MODULES, installModule, listModules, ModuleDependencyError } 
 import { listSpaces } from './space'
 import { invokeAgent } from './agent'
 import { FALLBACK_NPM_PREFIX, resolveBinary, unresolvableMcpServers } from './upgrade'
-import { createSnapshot, saveSnapshot } from './snapshot'
+import { createSnapshot, saveSnapshot, loadSnapshot, restoreFromSnapshot, type Snapshot } from './snapshot'
 import { startOperation } from '../state'
 import { BANNER, INIT_COMPLETE, Spinner, sleep, section, completionSequence } from './animation'
 import { spawnBackground, type BackgroundJob } from './background'
@@ -40,7 +40,7 @@ import { spawnBackground, type BackgroundJob } from './background'
 // success having created nothing — so every install bug had to be found by a
 // human on a clean laptop. Read at module load, which is correct for an env var
 // the caller sets before starting the process (see the init smoke test).
-import { ensureDatacoreVenv, ensureModuleDeps, initSucceeded, pipInstallInto, venvPython } from './python-env'
+import { checkVenvSupport, ensureDatacoreVenv, ensureModuleDeps, initSucceeded, pipInstallInto, venvPython } from './python-env'
 
 const DATA_DIR = process.env.DATACORE_ROOT || join(homeDir(), 'Data')
 const DATACORE_DIR = join(DATA_DIR, '.datacore')
@@ -181,6 +181,15 @@ export interface InitOptions {
    * silently — every value was chosen by a human, just not at a prompt.
    */
   answers?: InitAnswers
+  /**
+   * Set up a SECOND machine from `datacore snapshot create` on the first:
+   * clone the root from where the snapshot says, then its spaces and modules,
+   * and never create a template space the snapshot provides. Without this the
+   * only route was init (which writes a template 0-personal) followed by
+   * restore (which skips any space that exists), so the real personal space
+   * was silently not restored.
+   */
+  fromSnapshot?: string
 }
 
 /** What the wizard would have asked. See `datacore init --print-questions`. */
@@ -508,7 +517,7 @@ function ensureRecallHook(isTTY: boolean | undefined, result: InitResult): void 
     s.hooks = s.hooks ?? {}
     const groups = s.hooks.UserPromptSubmit ?? (s.hooks.UserPromptSubmit = [])
     if (groups.length === 0) groups.push({ hooks: [] })
-    const group = groups[0]
+    const group = groups[0]!
     group.hooks = group.hooks ?? []
     group.hooks.push({
       type: 'command',
@@ -1134,6 +1143,44 @@ async function configurePermissionPreference(result: InitResult): Promise<void> 
   }
 }
 
+// ─── Second machine ───────────────────────────────────────────────────────────
+
+/** What a user who already has Datacore elsewhere needs to know. */
+export const SECOND_MACHINE_HELP = [
+  'To bring your existing Datacore (all spaces and modules) to this machine:',
+  '  1. On the machine you already use, run:',
+  '       datacore snapshot create --settings',
+  '     It writes ~/Data/datacore.lock.yaml (add --with-registry to carry the',
+  '     private registry files too; then keep the file private).',
+  '  2. Copy that file to this machine (scp, a USB stick, anything).',
+  '  3. Here, run:',
+  '       datacore init --from-snapshot datacore.lock.yaml',
+] as const
+
+/**
+ * What step 5 does about the personal space.
+ *   exists                 -- leave it alone
+ *   missing-from-snapshot  -- the snapshot provides it but it is not here
+ *                             (its clone failed): do NOT put a template in
+ *                             its place, or the real one is never restored
+ *   create                 -- no snapshot provides one: create the template
+ */
+export function personalSpacePlan(dataDir: string, snapshot: Snapshot | null): 'exists' | 'missing-from-snapshot' | 'create' {
+  // Only a space with a git source can come from the snapshot; one without
+  // is skipped by restore, and a template is then the right thing.
+  const fromSnapshot = snapshot?.spaces.find((sp) => (sp.type === 'personal' || sp.number === 0) && sp.source)
+  if (fromSnapshot) return existsSync(join(dataDir, fromSnapshot.name)) ? 'exists' : 'missing-from-snapshot'
+  return existsSync(join(dataDir, '0-personal')) ? 'exists' : 'create'
+}
+
+/** Clone the root from where the snapshot's root came from, before the defaults. */
+export function snapshotCloneUrls(snapshot: Snapshot | null, defaults: string[]): string[] {
+  const src = snapshot?.root?.source
+  if (!src) return defaults
+  const ssh = src.replace('https://github.com/', 'git@github.com:')
+  return [...new Set([src, ...(ssh !== src ? [ssh] : []), ...defaults])]
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -1175,6 +1222,17 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     modulesInstalled: [],
   }
 
+  // A snapshot that cannot be read stops here, before anything is changed.
+  let snapshot: Snapshot | null = null
+  if (options.fromSnapshot) {
+    snapshot = loadSnapshot(options.fromSnapshot)
+    if (!snapshot || !Array.isArray(snapshot.spaces) || !Array.isArray(snapshot.modules)) {
+      result.errors.push(`Could not read snapshot ${options.fromSnapshot}: not found or not a datacore.lock.yaml. ` +
+        'Create one on your other machine with: datacore snapshot create --settings')
+      return result
+    }
+  }
+
   // Without a TTY every prompt is skipped and the wizard accepts EVERY
   // default in silence — the user is never asked their name, their modules,
   // or what to call their Chief of Staff, and the run still exits 0. That is
@@ -1210,6 +1268,10 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
   op.start()
 
   let profile: UserProfile = { name: '', email: '', useCase: 'both', role: '' }
+  /** Set when the venv check failed: the reason, with the install command. */
+  let venvBlocked: string | null = null
+  /** Modules cloned from the snapshot: their own dependencies install in step 6. */
+  let restoredModules: string[] = []
 
   try {
     // ═════════════════════════════════════════════════════════════════════
@@ -1221,6 +1283,30 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       console.log(`  ${c.dim}Setting up your AI-powered second brain...${c.reset}`)
       console.log()
       await sleep(300)
+    }
+
+    // Ask once, before anything is installed: a second machine should take its
+    // spaces from the first, not start a fresh template install beside them.
+    if (interactive && !snapshot) {
+      console.log()
+      const elsewhere = await confirm('  Do you already use Datacore on another machine?', false)
+      if (elsewhere) {
+        console.log()
+        for (const line of SECOND_MACHINE_HELP) console.log(`  ${c.dim}${line}${c.reset}`)
+        console.log()
+        const path = await prompt('  Path to the snapshot file on this machine (Enter to stop and come back with it)', '')
+        if (!path) {
+          result.errors.push('Stopped so you can bring a snapshot from your other machine. Then run: datacore init --from-snapshot <file>')
+          op.fail('stopped: second machine without a snapshot')
+          return result
+        }
+        snapshot = loadSnapshot(path)
+        if (!snapshot) {
+          result.errors.push(`Could not read snapshot ${path}. Nothing was changed.`)
+          op.fail('unreadable snapshot')
+          return result
+        }
+      }
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -1416,6 +1502,33 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
         result.warnings.push('Python not installed - some agents may not work')
       }
 
+      // Datacore's MCP server runs from a virtual environment. On Debian and
+      // Ubuntu `python3 -m venv` fails until python3.X-venv is installed, and
+      // init used to find that out only after setup, leaving a server that
+      // could not start. Check now, and name the exact command.
+      if (python.available) {
+        const venvCheck = checkVenvSupport()
+        if (venvCheck.ok) {
+          if (isTTY) console.log(`  ${c.green}✓${c.reset} python venv ${c.dim}(${venvCheck.python})${c.reset}`)
+        } else {
+          if (isTTY) {
+            console.log(`  ${c.red}✗${c.reset} python cannot create a virtual environment ${c.dim}(${venvCheck.error})${c.reset}`)
+            console.log(`    Install it with: ${c.bold}${venvCheck.fix}${c.reset}`)
+          }
+          if (interactive) {
+            await prompt('  Run that in another terminal, then press Enter to check again', '')
+            const again = checkVenvSupport()
+            if (again.ok) {
+              console.log(`  ${c.green}✓${c.reset} python venv ${c.dim}(${again.python})${c.reset}`)
+            } else {
+              venvBlocked = `Python cannot create a virtual environment, so Datacore's MCP server cannot start. Install it with: ${venvCheck.fix}, then run: datacore update`
+            }
+          } else {
+            venvBlocked = `Python cannot create a virtual environment, so Datacore's MCP server cannot start. Install it with: ${venvCheck.fix}, then run: datacore update`
+          }
+        }
+      }
+
       // --- GitHub CLI ---
       const gh = await ensureDependency('gh', 'gh', platform, !!isTTY)
       if (gh.available && !gh.wasInstalled && isTTY) {
@@ -1490,7 +1603,9 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     // ── Phase 1: Ensure fork exists (if gh is authenticated) ──────────
     let ghUser: string | undefined
 
-    if (ghAuth.available) {
+    // From a snapshot, the root comes from where the snapshot's root came
+    // from; there is no fork to check or make.
+    if (ghAuth.available && !snapshot?.root?.source) {
       ghUser = ghAuth.user || runArgsOutput('gh', ['api', 'user', '-q', '.login'], { timeout: 15000 })
 
       const forkSpinner = isTTY ? new Spinner('Checking fork...') : null
@@ -1537,12 +1652,14 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     }
 
     // Build ordered list of URLs to try (fork HTTPS, fork SSH, upstream HTTPS, upstream SSH)
-    const cloneUrls: string[] = []
+    let cloneUrls: string[] = []
     if (ghUser) {
       cloneUrls.push(`https://github.com/${ghUser}/datacore.git`)
       cloneUrls.push(`git@github.com:${ghUser}/datacore.git`)
     }
-    if (!ghAuth.available && interactive) {
+    if (snapshot?.root?.source) {
+      cloneUrls = snapshotCloneUrls(snapshot, [upstreamUrl, `git@github.com:${UPSTREAM_REPO}.git`])
+    } else if (!ghAuth.available && interactive) {
       const customUrl = await prompt('  Repository URL', upstreamUrl)
       cloneUrls.push(customUrl)
       const sshUrl = customUrl.replace('https://github.com/', 'git@github.com:')
@@ -1552,7 +1669,7 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       cloneUrls.push(`git@github.com:${UPSTREAM_REPO}.git`)
     }
 
-    if (!ghAuth.available && interactive) {
+    if (!ghAuth.available && interactive && !snapshot?.root?.source) {
       console.log(`  ${c.dim}GitHub CLI not authenticated. Cloning upstream directly.${c.reset}`)
       console.log(`  ${c.dim}You can fork later with: gh repo fork --remote${c.reset}`)
       console.log()
@@ -1615,7 +1732,8 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       if (cloned) {
         cloneSpinner?.succeed('Cloned into ~/Data')
         result.created.push(DATA_DIR)
-        if (ghUser) {
+        const origin = runArgsOutput('git', ['-C', DATA_DIR, 'remote', 'get-url', 'origin'])
+        if (ghUser || (snapshot && origin && !origin.includes(UPSTREAM_REPO))) {
           runArgs('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: DATA_DIR })
         }
       } else if (lastCloneErr.includes('already exists and is not an empty directory')) {
@@ -1656,7 +1774,10 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
 
         if (initOk) {
           cloneSpinner?.succeed('Git initialized in existing ~/Data')
-          if (ghUser) {
+          // Same rule as the clone path above: a fork (or a snapshot's root
+          // that is not upstream itself) gets `upstream`, so update can merge.
+          const origin = runArgsOutput('git', ['-C', DATA_DIR, 'remote', 'get-url', 'origin'])
+          if (ghUser || (snapshot && origin && !origin.includes(UPSTREAM_REPO))) {
             runArgs('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: DATA_DIR })
           }
         } else {
@@ -1750,13 +1871,43 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
 
     op.completeStep('clone_repo')
 
+    // ── From a snapshot: the spaces and modules the other machine has ──
+    // Before step 4 and 5, so nothing below mistakes a missing space for a
+    // first install and writes a template in its place.
+    if (snapshot) {
+      op.addStep('restore_snapshot')
+      op.startStep('restore_snapshot')
+      if (isTTY) {
+        section('From your snapshot')
+        console.log()
+        console.log(`  ${c.dim}Snapshot from ${snapshot.created || 'an unknown date'}: ${snapshot.spaces.length} spaces, ${snapshot.modules.length} modules.${c.reset}`)
+      }
+      const spinner = isTTY ? new Spinner('Cloning spaces and modules...') : null
+      spinner?.start()
+      const restored = restoreFromSnapshot(snapshot)
+      spinner?.succeed(`${restored.spacesCreated.length} space(s) and ${restored.modulesInstalled.length} module(s) cloned`)
+      restoredModules = restored.modulesInstalled
+      result.spacesCreated.push(...restored.spacesCreated)
+      result.warnings.push(...restored.warnings)
+      for (const f of restored.registryWritten) result.created.push(join(DATACORE_DIR, 'registry', f))
+      for (const f of restored.modulesFailed) {
+        result.errors.push(`Module ${f.name} from the snapshot could not be cloned: ${f.error.split('\n')[0]}`)
+      }
+      if (isTTY) {
+        for (const w of restored.warnings) console.log(`  ${c.yellow}!${c.reset} ${c.dim}${w}${c.reset}`)
+        console.log()
+      }
+      op.completeStep('restore_snapshot')
+    }
+
     // ═════════════════════════════════════════════════════════════════════
     // STEP 4/10: TEAM SPACES
     // ═════════════════════════════════════════════════════════════════════
     op.addStep('team_spaces')
     op.startStep('team_spaces')
 
-    if (interactive) {
+    // From a snapshot the spaces are the snapshot's: nothing to ask.
+    if (interactive && !snapshot) {
       section(`Step 4/${TOTAL_STEPS}: Team Spaces`)
       console.log()
       console.log(`  ${c.dim}Spaces separate different areas of your life. Your personal space${c.reset}`)
@@ -1987,11 +2138,19 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
       console.log()
     }
 
-    // Verify personal space exists
-    const personalPath = join(DATA_DIR, '0-personal')
-    if (existsSync(personalPath)) {
-      if (isTTY) console.log(`  ${c.green}✓${c.reset} Personal space ready (0-personal/)`)
-      result.spacesCreated.push('0-personal')
+    // Verify personal space exists -- and never put a template where the
+    // snapshot's own personal space belongs.
+    const plan = personalSpacePlan(DATA_DIR, snapshot)
+    const snapPersonal = snapshot?.spaces.find((sp) => (sp.type === 'personal' || sp.number === 0) && sp.source)
+    const personalPath = join(DATA_DIR, snapPersonal?.name ?? '0-personal')
+    if (plan === 'missing-from-snapshot') {
+      if (isTTY) console.log(`  ${c.red}✗${c.reset} ${snapPersonal!.name} is in your snapshot but could not be cloned`)
+      result.errors.push(
+        `${snapPersonal!.name} is in your snapshot but could not be cloned (see the warnings). No template was created in its place. ` +
+        `Check access to ${snapPersonal!.source ?? 'its repository'}, then run: datacore snapshot restore ${options.fromSnapshot ?? '<file>'}`)
+    } else if (plan === 'exists') {
+      if (isTTY) console.log(`  ${c.green}✓${c.reset} Personal space ready (${basename(personalPath)}/)`)
+      if (!result.spacesCreated.includes(basename(personalPath))) result.spacesCreated.push(basename(personalPath))
     } else {
       // Create personal space
       if (isTTY) console.log(`  ${c.dim}Creating personal space...${c.reset}`)
@@ -2126,7 +2285,10 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     // Determine which modules to install
     let modulesToInstall: typeof AVAILABLE_MODULES = []
 
-    if (interactive) {
+    if (snapshot) {
+      // The snapshot is the module list; they were cloned above.
+      modulesToInstall = []
+    } else if (interactive) {
       // Show all modules with checkboxes, all selected by default
       console.log(`  ${c.dim}All modules are selected by default. Deselect any you don't need:${c.reset}`)
       console.log()
@@ -2176,9 +2338,23 @@ export async function initDatacore(options: InitOptions = {}): Promise<InitResul
     }
 
     // Python dependencies go into .datacore/venv before any module needs them.
-    const venv = ensureDatacoreVenv(DATA_DIR)
-    result.warnings.push(...venv.warnings)
-    if (!venv.python) result.errors.push('Core Python dependencies are not installed; the MCP server cannot start. Fix: datacore update')
+    if (venvBlocked) {
+      // Already diagnosed in step 2, with the exact install command.
+      result.errors.push(venvBlocked)
+    } else {
+      const venv = ensureDatacoreVenv(DATA_DIR)
+      result.warnings.push(...venv.warnings)
+      if (!venv.python) result.errors.push('Core Python dependencies are not installed; the MCP server cannot start. Fix: datacore update')
+    }
+
+    // Modules cloned from the snapshot still need their own dependencies.
+    for (const name of restoredModules) {
+      const modPath = join(modulesDir, name)
+      const post = runModulePostInstall(modPath)
+      if (post.ran && !post.success) {
+        result.errors.push(`Module ${name} is broken: its ${post.type ?? ''} dependencies failed to install. Retry with: datacore update`)
+      }
+    }
 
     // Install selected modules
     let installCount = 0

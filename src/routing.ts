@@ -29,7 +29,8 @@ export type MetaCommand = typeof META_COMMANDS[number]
 
 // Actions per resource
 export const ACTIONS: Record<Resource, readonly string[]> = {
-  space: ['create', 'list'],
+  // join and audit have handlers; leaving them out here hid them from --help.
+  space: ['create', 'join', 'list', 'audit'],
   module: ['install', 'list', 'update', 'remove'],
   config: ['show', 'get', 'set'],
   nightshift: ['status', 'trigger', 'queue'],

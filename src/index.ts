@@ -10,7 +10,7 @@ import { showHelp, showResourceHelp, showActionHelp } from './help'
 import { detectFormat, output, success, info, warn, error as errorLog } from './format'
 import { CLIError } from './errors'
 import { readFileSync } from 'fs'
-import { runDoctor } from './lib/dependency'
+import { runDoctor, doctorVerdict } from './lib/dependency'
 import { loadConfig, getConfigValue, setConfigValue, getAllConfig } from './config'
 import { listSpaces, createSpace, initSpaceGit, detectForges, createSpaceRemote, joinSpace, auditSpace }
   from './lib/space'
@@ -68,6 +68,19 @@ async function handleMeta(
         }
       }
 
+      const fromSnapshot = typeof flags['from-snapshot'] === 'string' ? flags['from-snapshot'] as string : undefined
+      if (flags['from-snapshot'] === true) {
+        errorLog('--from-snapshot needs a file: datacore init --from-snapshot datacore.lock.yaml')
+        process.exitCode = 1
+        break
+      }
+      if (fromSnapshot && isInitialized() && !flags.force) {
+        // Already set up: restore adds what is missing without re-running setup.
+        info('Datacore is already set up here. To add the spaces and modules the snapshot has, run:')
+        info(`  datacore snapshot restore ${fromSnapshot}`)
+        break
+      }
+
       if (isInitialized() && !flags.force) {
         if (format === 'json') {
           output({ success: true, message: 'Datacore already initialized', hint: 'Use datacore update or --force to re-initialize' }, format)
@@ -86,6 +99,7 @@ async function handleMeta(
         stream: format === 'human',
         verbose: flags.verbose === true,
         force: flags.force === true,
+        fromSnapshot,
       })
 
       if (format === 'json') {
@@ -217,7 +231,10 @@ async function handleMeta(
         }
         if (result.mcpConfig) {
           console.log('MCP Server:')
-          console.log(`  ${result.mcpConfig.claudeDesktop ? '✓' : '✗'} Claude Desktop config`)
+          // null: no Claude Desktop on this machine (none exists for Linux) -- nothing to check.
+          if (result.mcpConfig.claudeDesktop !== null) {
+            console.log(`  ${result.mcpConfig.claudeDesktop ? '✓' : '✗'} Claude Desktop config`)
+          }
           console.log(`  ${result.mcpConfig.claudeCode ? '✓' : '✗'} Claude Code .mcp.json`)
           console.log()
         }
@@ -239,13 +256,23 @@ async function handleMeta(
           console.log()
         }
 
-        if (result.status === 'ready') {
-          success('System ready for Datacore')
-        } else if (result.status === 'missing_required') {
-          errorLog('Missing required dependencies')
+        if (result.ledger?.length) {
+          console.log('Ledger:')
+          for (const l of result.ledger) {
+            console.log(`  ${l.ok === true ? '✓' : l.ok === false ? '✗' : '?'} ${l.name}: ${l.detail}`)
+            if (l.ok !== true && l.fix) console.log(`      Fix: ${l.fix}`)
+          }
+          console.log()
+        }
+
+        const verdict = doctorVerdict(result.status)
+        if (verdict.level === 'ok') {
+          success(verdict.message)
+        } else if (verdict.level === 'error') {
+          errorLog(verdict.message)
           process.exitCode = 1
         } else {
-          warn('Missing recommended dependencies')
+          warn(verdict.message)
         }
       }
       break
@@ -616,8 +643,10 @@ async function handleResource(
               info('No modules to update')
             } else {
               for (const r of results) {
-                if (r.updated) {
-                  success(`Updated: ${r.name}`)
+                if (r.core) {
+                  info(`${r.name}: core module (updated with Datacore)`)
+                } else if (r.updated) {
+                  success(`Updated: ${r.name}${r.reattached ? ` (was detached, back on ${r.reattached})` : ''}`)
                 } else {
                   warn(`${r.name}: ${r.error || 'not updated'}`)
                 }
@@ -875,10 +904,11 @@ async function handleResource(
       switch (action) {
         case 'create': {
           const includeSettings = flags.settings === true
+          const includeRegistry = flags['with-registry'] === true
           const outputPath = cmdArgs[0]
 
           info('Creating snapshot...')
-          const snapshot = createSnapshot({ includeSettings })
+          const snapshot = createSnapshot({ includeSettings, includeRegistry })
           const savedPath = saveSnapshot(snapshot, outputPath)
 
           if (format === 'json') {
@@ -891,8 +921,12 @@ async function handleResource(
             if (includeSettings) {
               console.log('  Settings: included')
             }
+            if (snapshot.registry) {
+              console.log(`  Private registry: ${Object.keys(snapshot.registry).join(', ')}`)
+              warn('This file now holds private registry data: copy it directly, do not commit or share it')
+            }
             console.log()
-            info('Share this file to replicate your setup')
+            info('On another machine: datacore init --from-snapshot <this file>')
           }
           break
         }
@@ -936,6 +970,10 @@ async function handleResource(
               for (const { name, error } of result.modulesFailed) {
                 errorLog(`  ${name}: ${error}`)
               }
+            }
+            if (result.registryWritten.length > 0) {
+              console.log('Registry files written:')
+              for (const name of result.registryWritten) success(`  ${name}`)
             }
             if (result.spacesCreated.length > 0) {
               console.log('Spaces created:')

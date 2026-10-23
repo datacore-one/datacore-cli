@@ -107,6 +107,15 @@ Actions:`)
     console.log(`  ${action.padEnd(18)} ${getActionDescription(resource as Resource, action)}`)
   }
 
+  if (resource === 'space') {
+    // `space join` clones ONE space. A whole second machine (every space and
+    // module) is the snapshot route, which nothing used to point to.
+    console.log(`
+Setting up another machine with ALL your spaces and modules:
+  on the existing machine:  datacore snapshot create --settings
+  on the new machine:       datacore init --from-snapshot datacore.lock.yaml`)
+  }
+
   console.log(`
 For detailed help on an action:
   datacore ${resource} <action> --help
@@ -173,6 +182,10 @@ Options:
   --skip-checks        Skip dependency checks
   --print-questions    Print the setup questions as JSON and exit
   --answers <file>     Answer the questions from a JSON file
+  --from-snapshot <file>
+                       Set up a second machine from a snapshot of an existing
+                       one: clones its spaces and modules, and never creates
+                       a template space the snapshot provides
 
 Environment:
   DATACORE_ROOT              Installation directory (overrides ~/Data)
@@ -193,6 +206,11 @@ Examples:
 
   # Custom location
   datacore init --path ~/my-data
+
+  # Second machine: on the first one run
+  #   datacore snapshot create --settings      (writes ~/Data/datacore.lock.yaml)
+  # copy that file here, then
+  datacore init --from-snapshot datacore.lock.yaml
 
   # Agent asks, then answers on the user's behalf
   datacore init --print-questions > q.json
@@ -640,6 +658,9 @@ Arguments:
 
 Options:
   --settings         Include base settings in snapshot
+  --with-registry    Also include the PRIVATE registry files (repositories,
+                     infrastructure, principals). They are gitignored, and a
+                     second machine needs them; treat the file as private.
   --format json      Output as JSON
 
 Examples:
@@ -654,8 +675,16 @@ Usage:
 
 Description:
   Restores Datacore installation from a snapshot file:
-  - Installs missing modules (at exact commits)
-  - Creates missing spaces (if git sources available)
+  - Installs missing modules at their snapshot commits, ON their branch
+    (so the next datacore update can pull them)
+  - Clones missing spaces (if git sources available), also on their branch
+  - Skips core modules: they ship inside the Datacore repo itself
+  - Writes private registry files the snapshot carries (--with-registry),
+    only where this machine has none
+
+  On a NEW machine use: datacore init --from-snapshot <file>
+  (restore after a plain init would find init's template 0-personal and
+  skip the real one)
 
 Arguments:
   [path]             Snapshot file (default: ~/Data/datacore.lock.yaml)

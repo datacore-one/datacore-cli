@@ -210,6 +210,11 @@ async function handleMeta(
       break
     }
 
+    case 'join': {
+      await handleJoin(cmdArgs, flags, format)
+      break
+    }
+
     case 'doctor': {
       const result = runDoctor()
       if (format === 'json') {
@@ -418,6 +423,146 @@ async function handleMeta(
 
     default:
       throw new CLIError('ERR_INVALID_ARGUMENT', `Unknown command: ${command}`)
+  }
+}
+
+/**
+ * `datacore join --prepare <name>` on the existing machine, then
+ * `datacore join <bundle>` on the new one. See src/lib/join.ts.
+ */
+async function handleJoin(
+  cmdArgs: string[],
+  flags: Record<string, string | boolean>,
+  format: 'json' | 'human'
+): Promise<void> {
+  const { prepareJoin, runJoin, JoinRefusal } = await import('./lib/join')
+  const str = (v: string | boolean | undefined) => (typeof v === 'string' ? v : undefined)
+  try {
+    if (flags.prepare !== undefined) {
+      if (flags.prepare === true) {
+        errorLog("--prepare needs the new machine's name: datacore join --prepare <new-machine>")
+        process.exitCode = 1
+        return
+      }
+      const r = prepareJoin({
+        name: flags.prepare as string,
+        actor: str(flags.actor),
+        owner: str(flags.owner),
+        output: str(flags.output),
+        dryRun: flags['dry-run'] === true,
+      })
+      if (format === 'json') {
+        output(r, format)
+        return
+      }
+      const dry = flags['dry-run'] === true
+      success(dry ? `Dry run: nothing written. The bundle would go to ${r.path}` : `Join bundle written: ${r.path} (mode 600, no secrets)`)
+      console.log(`  Machine: ${r.machine.name}  actor: ${r.machine.actor}${r.machine.owner ? `  owner: ${r.machine.owner}` : ''}`)
+      if (r.registered.length) {
+        console.log(`  ${dry ? 'Would register' : 'Registered'} on this machine:`)
+        for (const c of r.registered) console.log(`    + ${c}`)
+      } else {
+        console.log('  Already registered on this machine.')
+      }
+      for (const n of r.notes) warn(n)
+      console.log(`  Local files carried: ${r.files.length} (rules from ${r.rulesFrom})`)
+      for (const s of r.skipped) console.log(`    - not carried: ${s}`)
+      if (r.ownerSteps.length) {
+        console.log()
+        console.log('Credentials: the new machine will print its key and wait for you to do this:')
+        for (const l of r.ownerSteps) console.log(`  ${l}`)
+      }
+      console.log()
+      console.log('Copy the bundle to the new machine, then run there:')
+      console.log(`  ${r.copyHint}`)
+      console.log(`  ${r.command}`)
+      console.log()
+      info('Delete the bundle from both machines once the join is done: it holds your private registry.')
+      return
+    }
+
+    const bundlePath = cmdArgs[0]
+    if (!bundlePath) {
+      throw new CLIError('ERR_INVALID_ARGUMENT', 'Missing bundle file',
+        'On the existing machine: datacore join --prepare <new-machine>; then here: datacore join <bundle>')
+    }
+    let answers: InitAnswers | undefined
+    const answersPath = str(flags.answers)
+    if (answersPath) {
+      try {
+        answers = JSON.parse(readFileSync(answersPath, 'utf-8')) as InitAnswers
+      } catch (e) {
+        errorLog(`Could not read answers file ${answersPath}: ${(e as Error).message}`)
+        process.exitCode = 1
+        return
+      }
+    }
+    const canWait = format === 'human' && process.stdin.isTTY === true && flags['no-wait'] !== true
+    let shown = false
+    const r = await runJoin(bundlePath, {
+      initialized: isInitialized,
+      init: async (lockPath) => {
+        const res = await initDatacore({
+          fromSnapshot: lockPath,
+          nonInteractive: flags.yes === true,
+          answers,
+          skipChecks: flags['skip-checks'] === true,
+          stream: format === 'human',
+          verbose: flags.verbose === true,
+        })
+        return { ok: res.success, errors: res.errors, warnings: res.warnings }
+      },
+      doctor: () => {
+        const v = doctorVerdict(runDoctor().status)
+        return { ok: v.level === 'ok', message: v.message }
+      },
+      waitForOwner: canWait
+        ? async (cred) => {
+            console.log()
+            if (!shown) {
+              warn(`Credentials: ${cred.detail}`)
+              for (const l of cred.ownerSteps) console.log(`  ${l}`)
+              shown = true
+            } else {
+              warn(`Still waiting: ${cred.detail}`)
+            }
+            await prompt('Press Enter once that is done (Ctrl-C stops; the same join command continues later)')
+            return true
+          }
+        : undefined,
+    })
+
+    if (format === 'json') {
+      output(r, format)
+    } else {
+      console.log()
+      console.log(`Joined as ${r.machine.name} (actor ${r.machine.actor}):`)
+      for (const d of r.done) console.log(`  ✓ ${d}`)
+      for (const w of r.warnings) warn(w)
+      for (const e of r.errors) errorLog(e)
+      if (r.checks.length) {
+        console.log()
+        console.log('Checks:')
+        for (const c of r.checks) console.log(`  ${c.ok ? '✓' : '✗'} ${c.name}: ${c.detail}`)
+      }
+      console.log()
+      if (r.ownerTodo.length) {
+        console.log('Still to do:')
+        for (const t of r.ownerTodo) console.log(`  ${t}`)
+      } else {
+        success('This machine mirrors your installation. Nothing left to do.')
+        info(`Delete the bundle now: rm ${bundlePath}`)
+      }
+    }
+    process.exitCode = r.ok ? 0 : r.credentials.status === 'waiting-for-owner' ? 2 : 1
+  } catch (e) {
+    if (e instanceof JoinRefusal) {
+      if (format === 'json') output({ ok: false, refused: e.message }, format)
+      else errorLog(`Refused: ${e.message}`)
+      process.exitCode = 1
+      return
+    }
+    throw e
   }
 }
 

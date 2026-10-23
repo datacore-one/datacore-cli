@@ -14,6 +14,7 @@ Usage:
 
 Setup:
   init                 Set up a new Datacore installation
+  join                 Make this machine a mirror of your existing install
   update               Pull repos, modules, install MCP, rebuild context
   doctor               Check dependencies and system status
   ingest <path>        Import files during setup
@@ -65,6 +66,10 @@ export function showResourceHelp(resource: string): void {
     showInitHelp()
     return
   }
+  if (resource === 'join') {
+    showJoinHelp()
+    return
+  }
   if (resource === 'update') {
     showUpdateHelp()
     return
@@ -89,7 +94,7 @@ export function showResourceHelp(resource: string): void {
   if (!RESOURCES.includes(resource as Resource)) {
     console.log(`Unknown command: ${resource}
 
-Available commands: init, update, doctor, ingest, sync, today, tomorrow, space, module, config, nightshift, cron, snapshot, app
+Available commands: init, join, update, doctor, ingest, sync, today, tomorrow, space, module, config, nightshift, cron, snapshot, app
 
 Run 'datacore help' for overview.`)
     return
@@ -111,15 +116,84 @@ Actions:`)
     // `space join` clones ONE space. A whole second machine (every space and
     // module) is the snapshot route, which nothing used to point to.
     console.log(`
-Setting up another machine with ALL your spaces and modules:
-  on the existing machine:  datacore snapshot create --settings
-  on the new machine:       datacore init --from-snapshot datacore.lock.yaml`)
+Setting up another machine as a mirror of this one (spaces, modules,
+private registry, local config, identity, credentials):
+  on the existing machine:  datacore join --prepare <new-machine>
+  on the new machine:       datacore join <bundle>
+Spaces and modules only:    datacore snapshot create --settings, then
+                            datacore init --from-snapshot datacore.lock.yaml`)
   }
 
   console.log(`
 For detailed help on an action:
   datacore ${resource} <action> --help
   datacore help ${resource} <action>`)
+}
+
+function showJoinHelp(): void {
+  console.log(`datacore join - Make a new machine a mirror of your existing installation
+
+Usage:
+  datacore join --prepare <new-machine> [options]   (on the EXISTING machine)
+  datacore join <bundle> [options]                  (on the NEW machine)
+
+The same person, the same access: sessions on the new machine behave as they
+do on the existing one.
+
+On the existing machine, --prepare:
+  - adds the new machine to the private roster (.datacore/registry/
+    infrastructure.yaml: kind workstation, ssh alias, its own ledger actor)
+    and to the owner's hosts and writes_as in principals.yaml
+  - refuses an actor another machine already writes as: two machines writing
+    as one actor fork that writer's log
+  - writes ONE bundle file (mode 600): a snapshot with the private registry,
+    plus the gitignored local files (.datacore/config/*.local.yaml, the jobs
+    manifest.local.yaml, install.yaml roles, CLAUDE.local.md at the root and in
+    each space). Every carried file is scanned; a line that looks like a secret
+    stops it, and nothing is changed.
+  - prints the one command to run on the new machine
+
+On the new machine, join <bundle>:
+  1. init --from-snapshot: root, spaces and modules, each on its branch
+  2. the local files, with the rules of .datacore/lib/local_files_sync.py
+     (read from the installation when it has it): a file this machine already
+     has is never overwritten; roster files gain only keys they lack
+  3. the same registration here, and ~/.datacore/identity.env
+     (DATACORE_ACTOR=<actor>); refuses if this machine already writes as
+     someone else
+  4. the credential store: this machine cannot grant itself access. It prints
+     its ssh public key and what the owner must do on the store side (copy
+     the source machine's instances/<name>.yaml, push, authorise the key),
+     waits, then clones the store and runs its install, creds sync and
+     creds doctor. No secret value is ever printed.
+  5. checks: identity, every repo on its branch, every space clean,
+     datacore doctor; then a summary of what is done and what is left
+
+Running join again continues where it stopped.
+
+Options (--prepare):
+  --actor <name>       Ledger actor for the new machine (default: its name,
+                       which should be its short hostname)
+  --owner <principal>  Whose machine it is (default: the principal whose
+                       decision is final, else the only human)
+  --output <file>      Where to write the bundle
+                       (default: ~/.datacore/join/<new-machine>.join.yaml)
+  --dry-run            Check everything, change and write nothing
+
+Options (join <bundle>):
+  --yes / --answers <file>   Passed to init (see datacore init --help)
+  --no-wait            Do not wait for the owner's credential steps; exit 2
+                       and run the same command again later
+  --format json        Machine-readable result
+
+Exit codes: 0 joined, 1 refused or failed, 2 waiting for the owner.
+
+Examples:
+  # on the existing machine
+  datacore join --prepare dayshift
+  scp ~/.datacore/join/dayshift.join.yaml dayshift:
+  # on the new machine
+  npx @datacore-one/cli join ~/dayshift.join.yaml`)
 }
 
 function showUpdateHelp(): void {

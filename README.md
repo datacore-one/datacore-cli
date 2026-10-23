@@ -53,6 +53,8 @@ The MCP server (`@datacore-one/mcp`) is installed and configured for both Claude
 | `datacore update` | Pull repos, install MCP, rebuild context |
 | `datacore doctor` | Check dependencies, MCP config, system health |
 | `datacore ingest <path>` | Import files with AI processing |
+| `datacore join --prepare <machine>` | On your existing machine: register a new machine and write its join bundle |
+| `datacore join <bundle>` | On the new machine: mirror the existing install (see below) |
 
 ### Admin
 
@@ -66,6 +68,37 @@ The MCP server (`@datacore-one/mcp`) is installed and configured for both Claude
 | `datacore config show` | Show current settings |
 | `datacore snapshot create` | Create installation snapshot |
 | `datacore snapshot restore` | Restore from snapshot |
+
+### A second machine: `datacore join`
+
+One command makes a new machine a mirror of your existing installation: the
+same person, the same access, so sessions there behave the same.
+
+```bash
+# on the existing machine
+datacore join --prepare dayshift          # registers it, writes ~/.datacore/join/dayshift.join.yaml
+scp ~/.datacore/join/dayshift.join.yaml dayshift:
+
+# on the new machine
+npx @datacore-one/cli join ~/dayshift.join.yaml
+```
+
+`--prepare` adds the machine to your private roster with its own ledger actor
+(refusing one another machine already writes as) and to your principal's
+hosts and writers, then writes one bundle (mode 600): the snapshot with the
+private registry and the gitignored local files (`*.local.yaml` config,
+`install.yaml` roles, `CLAUDE.local.md` layers). Every carried file is scanned
+for secrets; a hit stops it before anything changes.
+
+`join <bundle>` sets up root, spaces and modules from the snapshot, lands the
+local files without overwriting any the machine already has (the rules of
+`local_files_sync.py`), registers the machine, writes
+`~/.datacore/identity.env`, and joins the credential store. Credentials are
+granted on the store side only: the new machine prints its public key and
+the steps for you, waits, then clones the store and runs `creds sync` and
+`creds doctor`. It ends with checks (identity, branches, clean spaces,
+`datacore doctor`) and a list of anything left to do. Running it again
+continues where it stopped.
 
 ### Automation
 

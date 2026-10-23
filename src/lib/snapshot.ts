@@ -5,12 +5,14 @@
  * pip's requirements.txt or npm's package-lock.json.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'fs'
 import { execSync } from 'child_process'
-import { join, basename } from 'path'
+import { execFileSync } from './exec'
+import { join } from 'path'
 import { parse, stringify } from 'yaml'
 import { listSpaces } from './space'
-import { listModules } from './module'
+import { listModules, moduleKind } from './module'
+import { checkoutOnBranch } from './gitbranch'
 import { checkDependencies, checkDatacore } from './dependency'
 import { loadConfig } from '../config'
 import { dataDir } from './paths'
@@ -25,7 +27,7 @@ const LOCK_FILE = () => join(dataDir(), 'datacore.lock.yaml')
 
 export interface ModuleLock {
   name: string
-  source: string       // git remote URL or "local"
+  source: string       // git remote URL, "core" (ships inside the root repo), or "local"
   version?: string     // from module.yaml
   commit?: string      // git commit hash for exact reproducibility
   branch?: string      // git branch
@@ -57,9 +59,24 @@ export interface Snapshot {
   spaces: SpaceLock[]
   dependencies: DependencyLock[]
 
+  /** Where the root Datacore repo itself comes from (a fork, usually). */
+  root?: { source?: string; commit?: string; branch?: string }
+
   // Configuration (base only, no local overrides for privacy)
   settings?: Record<string, unknown>
+
+  /**
+   * The installation's PRIVATE registry files (repositories, infrastructure,
+   * principals), verbatim. Only with `snapshot create --with-registry`: they
+   * are gitignored for a reason, so carrying them is an explicit choice. A
+   * second machine needs them; without repositories.yaml the sync transport
+   * refuses every repo that is not a space.
+   */
+  registry?: Record<string, string>
 }
+
+/** Private registry files a second machine needs and git does not carry. */
+export const PRIVATE_REGISTRY_FILES = ['repositories.yaml', 'infrastructure.yaml', 'principals.yaml'] as const
 
 /**
  * Get git info for a directory.
@@ -94,12 +111,18 @@ function getGitInfo(path: string): { remote?: string; commit?: string; branch?: 
 /**
  * Create a snapshot of the current Datacore installation.
  */
-export function createSnapshot(options: { includeSettings?: boolean } = {}): Snapshot {
-  const { includeSettings = false } = options
+export function createSnapshot(options: { includeSettings?: boolean; includeRegistry?: boolean } = {}): Snapshot {
+  const { includeSettings = false, includeRegistry = false } = options
 
   // Gather module info with git details
   const modules: ModuleLock[] = []
   for (const mod of listModules()) {
+    // A core module has no clone of its own: it arrives with the root repo,
+    // so recording it as "local" made restore warn it "cannot restore" it.
+    if (moduleKind(mod.path) === 'core') {
+      modules.push({ name: mod.name, source: 'core', version: mod.version })
+      continue
+    }
     const gitInfo = getGitInfo(mod.path)
     modules.push({
       name: mod.name,
@@ -144,6 +167,20 @@ export function createSnapshot(options: { includeSettings?: boolean } = {}): Sna
     dependencies,
   }
 
+  const rootGit = getGitInfo(DATA_DIR())
+  if (rootGit.remote || rootGit.commit) {
+    snapshot.root = { source: rootGit.remote, commit: rootGit.commit, branch: rootGit.branch }
+  }
+
+  if (includeRegistry) {
+    const registry: Record<string, string> = {}
+    for (const f of PRIVATE_REGISTRY_FILES) {
+      const p = join(DATA_DIR(), '.datacore', 'registry', f)
+      if (existsSync(p)) registry[f] = readFileSync(p, 'utf-8')
+    }
+    if (Object.keys(registry).length) snapshot.registry = registry
+  }
+
   // Optionally include settings (base only, not local)
   if (includeSettings) {
     const settingsPath = join(DATA_DIR(), '.datacore', 'settings.yaml')
@@ -168,7 +205,9 @@ export function saveSnapshot(snapshot: Snapshot, path?: string): string {
   const content = stringify(snapshot, {
     lineWidth: 0,  // Don't wrap lines
   })
-  writeFileSync(lockPath, content)
+  // Private registry data inside: readable by the owner only.
+  writeFileSync(lockPath, content, snapshot.registry ? { mode: 0o600 } : undefined)
+  if (snapshot.registry) { try { chmodSync(lockPath, 0o600) } catch { /* not POSIX */ } }
   return lockPath
 }
 
@@ -225,6 +264,7 @@ export function diffSnapshot(snapshot: Snapshot): SnapshotDiff {
       diff.modules.added.push(name)
     } else {
       const expected = snapshotModules.get(name)!
+      if (expected.source === 'core' || mod.source === 'core') continue
       if (expected.commit && mod.commit && expected.commit !== mod.commit) {
         diff.modules.changed.push({
           name,
@@ -235,7 +275,10 @@ export function diffSnapshot(snapshot: Snapshot): SnapshotDiff {
     }
   }
 
-  for (const name of snapshotModules.keys()) {
+  for (const [name, mod] of snapshotModules) {
+    // A missing core module means the root repo is behind, not that a module
+    // needs installing.
+    if (mod.source === 'core') continue
     if (!currentModules.has(name)) {
       diff.modules.removed.push(name)
     }
@@ -280,6 +323,8 @@ export interface RestoreResult {
   modulesInstalled: string[]
   modulesFailed: Array<{ name: string; error: string }>
   spacesCreated: string[]
+  /** Private registry files written (only those absent here). */
+  registryWritten: string[]
   warnings: string[]
 }
 
@@ -292,7 +337,25 @@ export function restoreFromSnapshot(
     modulesInstalled: [],
     modulesFailed: [],
     spacesCreated: [],
+    registryWritten: [],
     warnings: [],
+  }
+
+  // Private registry files: write only what is missing, never overwrite.
+  if (snapshot.registry && !dryRun) {
+    const dir = join(DATA_DIR(), '.datacore', 'registry')
+    for (const f of PRIVATE_REGISTRY_FILES) {
+      const text = snapshot.registry[f]
+      const p = join(dir, f)
+      if (typeof text !== 'string' || existsSync(p)) continue
+      try {
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(p, text, { mode: 0o600 })
+        result.registryWritten.push(f)
+      } catch (err) {
+        result.warnings.push(`Could not write registry file ${f}: ${(err as Error).message}`)
+      }
+    }
   }
 
   // Install missing modules
@@ -301,6 +364,12 @@ export function restoreFromSnapshot(
 
     for (const mod of snapshot.modules) {
       if (currentModules.has(mod.name)) {
+        continue
+      }
+
+      // Core modules come with the root repo; they are never cloned on their own.
+      if (mod.source === 'core') {
+        result.warnings.push(`Core module ${mod.name} is missing: it ships with Datacore itself; run: datacore update`)
         continue
       }
 
@@ -322,13 +391,18 @@ export function restoreFromSnapshot(
 
         const modulePath = join(modulesDir, mod.name)
 
-        // Clone at specific commit if available
-        execSync(`git clone ${mod.source} "${modulePath}"`, { stdio: 'pipe' })
+        // execFile, not a shell string: the lock file comes from another
+        // machine, and a URL in it must not be able to run anything.
+        execFileSync('git', ['clone', '--quiet', mod.source, modulePath], { stdio: 'pipe', timeout: 300000 })
 
+        // ON the branch at the snapshot commit -- never a detached HEAD, which
+        // made every later `git pull` fail ("not currently on a branch").
         if (mod.commit) {
-          execSync(`git checkout ${mod.commit}`, { cwd: modulePath, stdio: 'pipe' })
+          const on = checkoutOnBranch(modulePath, mod.commit, mod.branch)
+          if (!on.ok) throw new Error(on.warning || `could not check out ${mod.commit}`)
+          if (on.warning) result.warnings.push(on.warning)
         } else if (mod.branch) {
-          execSync(`git checkout ${mod.branch}`, { cwd: modulePath, stdio: 'pipe' })
+          execFileSync('git', ['switch', '--quiet', mod.branch], { cwd: modulePath, stdio: 'pipe' })
         }
 
         result.modulesInstalled.push(mod.name)
@@ -347,6 +421,13 @@ export function restoreFromSnapshot(
 
     for (const space of snapshot.spaces) {
       if (currentSpaces.has(space.name)) {
+        // The collision a second machine hit: init had made a TEMPLATE space
+        // of the same name, so the real one was silently never restored.
+        if (space.source && !existsSync(join(DATA_DIR(), space.name, '.git'))) {
+          result.warnings.push(
+            `Space ${space.name} already exists here but is not a git clone, so the snapshot's copy was NOT restored. ` +
+            `If it is an unused template, move it aside (mv ${space.name} ${space.name}.template) and run restore again.`)
+        }
         continue
       }
 
@@ -359,10 +440,13 @@ export function restoreFromSnapshot(
       if (space.source) {
         try {
           const spacePath = join(DATA_DIR(), space.name)
-          execSync(`git clone ${space.source} "${spacePath}"`, { stdio: 'pipe' })
+          execFileSync('git', ['clone', '--quiet', space.source, spacePath], { stdio: 'pipe', timeout: 300000 })
 
+          // Spaces too: on their default branch at the snapshot commit.
           if (space.commit) {
-            execSync(`git checkout ${space.commit}`, { cwd: spacePath, stdio: 'pipe' })
+            const on = checkoutOnBranch(spacePath, space.commit)
+            if (!on.ok) result.warnings.push(`Space ${space.name} cloned but not moved to ${space.commit.slice(0, 7)}: ${on.warning}`)
+            else if (on.warning) result.warnings.push(on.warning)
           }
 
           result.spacesCreated.push(space.name)

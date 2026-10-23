@@ -6,8 +6,9 @@
 
 import { execSync } from 'child_process'
 import { execFileSync, spawn } from './exec'
-import { existsSync } from 'fs'
-import { join, basename } from 'path'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { join, basename, resolve } from 'path'
+import { parseDocument } from 'yaml'
 import { listSpaces } from './space'
 import { dataDir, datacoreLib } from './paths'
 import { findPython } from './python'
@@ -38,6 +39,70 @@ function findLedgerTransport(): { python: string; script: string } | null {
  * stderr to be guessed at. Surface it verbatim; that naming is the whole point
  * of routing through it.
  */
+/**
+ * The transport's arguments. `--root` is passed explicitly: the transport
+ * decides "this is the root repo" (registry key `<root>`) by comparing paths,
+ * and left to its own default it guesses `~/Data`, which is wrong for any
+ * installation pointed elsewhere with DATACORE_ROOT.
+ */
+export function transportArgs(script: string, repoPath: string, root: string): string[] {
+  return [script, 'converge', '--space', repoPath, '--root', root]
+}
+
+/**
+ * Make sure the transport's registry names the root repo.
+ *
+ * `repositories.yaml` is private and gitignored, and a snapshot does not carry
+ * it, so a second machine has none -- and the transport then refuses the root
+ * repo with "repository not in registry/repositories.yaml", although nothing
+ * is wrong. Spaces declare themselves by marker; the root has no marker, so
+ * it needs this one entry. Never rewrites an entry that is there, and never
+ * touches a file it cannot parse.
+ */
+export function ensureRootRegistered(root: string): 'created' | 'added' | 'present' | 'skipped' {
+  if (!existsSync(join(root, '.git'))) return 'skipped'
+  const dir = join(root, '.datacore', 'registry')
+  const file = join(dir, 'repositories.yaml')
+  const entry = { category: 'code', host: 'github', transport: 'git', repo: 'datacore' }
+  try {
+    if (!existsSync(file)) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(file, [
+        '# Repository registry for the sync transport (private, gitignored).',
+        '# Created by `datacore update` because this machine had none. It names',
+        '# only the Datacore repo itself; spaces register by their own marker.',
+        '# Copy the full file from your other machine to add code repos.',
+        'repositories:',
+        '  <root>:',
+        ...Object.entries(entry).map(([k, v]) => `    ${k}: ${v}`),
+        '',
+      ].join('\n'))
+      return 'created'
+    }
+    const doc = parseDocument(readFileSync(file, 'utf-8'))
+    if (doc.errors.length) return 'skipped'
+    const repos = doc.get('repositories') as { has?: (k: string) => boolean } | undefined
+    if (repos && typeof repos.has === 'function' && repos.has('<root>')) return 'present'
+    if (repos !== undefined && (typeof repos !== 'object' || repos === null || typeof repos.has !== 'function')) return 'skipped'
+    doc.setIn(['repositories', '<root>'], doc.createNode(entry))
+    writeFileSync(file, doc.toString())
+    return 'added'
+  } catch {
+    return 'skipped'
+  }
+}
+
+/** One plain sentence for the update output, or null when there is nothing to say. */
+export function registryNotice(r: ReturnType<typeof ensureRootRegistered>): string | null {
+  if (r === 'created') {
+    return 'This machine had no .datacore/registry/repositories.yaml (it is private, so git does not carry it). ' +
+      'Created one that names only the Datacore repo. To bring over the full registry, copy it from your other machine, ' +
+      'or there run `datacore snapshot create --settings --with-registry` and restore that snapshot here.'
+  }
+  if (r === 'added') return 'Added the Datacore repo itself (<root>) to .datacore/registry/repositories.yaml.'
+  return null
+}
+
 function convergeRepo(
   t: { python: string; script: string },
   repoPath: string,
@@ -45,7 +110,7 @@ function convergeRepo(
   try {
     const out = execFileSync(
       t.python,
-      [t.script, 'converge', '--space', repoPath],
+      transportArgs(t.script, repoPath, resolve(DATA_DIR())),
       { encoding: 'utf-8', timeout: 180000, stdio: ['pipe', 'pipe', 'pipe'] },
     )
     const parsed = JSON.parse(out) as { ok: boolean; reason?: string }
@@ -183,10 +248,14 @@ export function getRepoStatus(path: string): SyncStatus | null {
  * is the safe failure. Silently restoring the removed behaviour would defeat
  * the fix on every machine that has not upgraded yet.
  */
-export function pullAll(options: { stream?: boolean } = {}): SyncResult[] {
+export function pullAll(options: { stream?: boolean; onRegistry?: (notice: string) => void } = {}): SyncResult[] {
   const results: SyncResult[] = []
   const repos = getGitRepos()
   const transport = findLedgerTransport()
+  if (transport) {
+    const notice = registryNotice(ensureRootRegistered(DATA_DIR()))
+    if (notice) options.onRegistry?.(notice)
+  }
 
   for (const repo of repos) {
     if (options.stream) {

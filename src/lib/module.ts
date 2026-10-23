@@ -6,8 +6,9 @@ import { runModulePostInstall } from './init'
  */
 
 import { existsSync, readdirSync, readFileSync, rmSync } from 'fs'
-import { join, basename } from 'path'
+import { join, basename, relative, isAbsolute } from 'path'
 import { execFileSync } from './exec'
+import { reattach } from './gitbranch'
 import type { ModuleInfo } from '../types'
 import { dataDir } from './paths'
 
@@ -351,30 +352,92 @@ export class ModuleDependencyError extends Error {
 }
 
 /**
+ * How a module is kept up to date.
+ *
+ *   repo  -- its own git clone (`.git` inside it): `git pull` updates it.
+ *   core  -- shipped inside the root Datacore repo (gtd, research, outbox, ...):
+ *            no clone of its own, updated whenever the root repo is.
+ *   local -- neither: a directory nobody tracks, so nothing can update it.
+ *
+ * Core modules used to be reported as "Not a git repository" and counted as
+ * failed updates -- 10 false failures on every update of a healthy install.
+ * The test is whether the root repo tracks files under the module's
+ * directory, which is the same rule the root .gitignore states.
+ */
+export function moduleKind(modulePath: string, root: string = DATA_DIR()): 'repo' | 'core' | 'local' {
+  if (existsSync(join(modulePath, '.git'))) return 'repo'
+  const rel = relative(root, modulePath)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return 'local'
+  try {
+    const out = execFileSync('git', ['ls-files', '--', rel], {
+      cwd: root, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15000,
+    }) as unknown as string
+    return String(out).trim() ? 'core' : 'local'
+  } catch {
+    return 'local'
+  }
+}
+
+export interface ModuleUpdateResult {
+  name: string
+  updated: boolean
+  error?: string
+  /** Shipped inside the root repo: updated with Datacore, not on its own. */
+  core?: boolean
+  /** Was on a detached HEAD and was moved back onto this branch first. */
+  reattached?: string
+}
+
+/**
  * Update all modules or a specific module.
  */
-export function updateModules(name?: string): Array<{ name: string; updated: boolean; error?: string }> {
+export function updateModules(name?: string): ModuleUpdateResult[] {
   const modules = listModules()
-  const results: Array<{ name: string; updated: boolean; error?: string }> = []
+  const results: ModuleUpdateResult[] = []
 
   const toUpdate = name ? modules.filter((m) => m.name === name) : modules
 
   for (const mod of toUpdate) {
     try {
-      // Check if it's a git repo
-      const gitDir = join(mod.path, '.git')
-      if (existsSync(gitDir)) {
-        execFileSync('git', ['pull'], { cwd: mod.path, stdio: 'pipe', timeout: 60000 })
-        results.push({ name: mod.name, updated: true })
-      } else {
-        results.push({ name: mod.name, updated: false, error: 'Not a git repository' })
+      const kind = moduleKind(mod.path)
+      if (kind === 'core') {
+        results.push({ name: mod.name, updated: false, core: true })
+        continue
       }
+      if (kind === 'local') {
+        results.push({ name: mod.name, updated: false, error: 'Not a git repository' })
+        continue
+      }
+      // A module restored by an older CLI sits on a detached HEAD, where
+      // `git pull` cannot work. Return it to its branch first -- or stop,
+      // untouched, if that would strand commits.
+      const back = reattach(mod.path)
+      if (!back.ok) {
+        results.push({ name: mod.name, updated: false, error: back.error })
+        continue
+      }
+      execFileSync('git', ['pull'], { cwd: mod.path, stdio: 'pipe', timeout: 60000 })
+      results.push({ name: mod.name, updated: true, ...(back.switched ? { reattached: back.branch } : {}) })
     } catch (err) {
-      results.push({ name: mod.name, updated: false, error: (err as Error).message })
+      // git's own words, not "Command failed: git pull" (the summary shows one line).
+      const stderr = String((err as { stderr?: Buffer | string }).stderr ?? '').trim()
+      results.push({ name: mod.name, updated: false, error: stderr || (err as Error).message })
     }
   }
 
   return results
+}
+
+/** Counts for the update summary. Core modules are neither updated nor failed. */
+export function tallyModuleResults(results: ModuleUpdateResult[]): { updated: number; current: number; core: number; failed: number } {
+  const t = { updated: 0, current: 0, core: 0, failed: 0 }
+  for (const r of results) {
+    if (r.core) t.core++
+    else if (r.updated) t.updated++
+    else if (r.error) t.failed++
+    else t.current++
+  }
+  return t
 }
 
 /**

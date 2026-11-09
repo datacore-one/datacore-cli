@@ -73,7 +73,8 @@ export interface DoctorResult {
   datacoreExists: boolean
   dependencies: DependencyCheck[]
   status: 'ready' | 'missing_required' | 'missing_recommended' | 'ledger_degraded'
-  mcpConfig?: { claudeDesktop: boolean; claudeCode: boolean }
+  /** claudeDesktop is null where it does not apply (Linux, or the app is not installed). */
+  mcpConfig?: { claudeDesktop: boolean | null; claudeCode: boolean }
   codePermissions?: { enableAll: boolean; mcpAllowed: boolean }
   ledger?: LedgerCheck[]
   /** The installation's own gaps (identity, principals, event logs, inbox, jobs),

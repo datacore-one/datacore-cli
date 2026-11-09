@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ensureDatacoreVenv, ensureModuleDeps, venvPython } from '../src/lib/python-env'
@@ -96,5 +96,50 @@ describe('ensureModuleDeps native builds (review #5)', () => {
     const calls: string[][] = []
     ensureModuleDeps(d, (cmd, args) => { calls.push([cmd, ...args]); return { ok: true } })
     expect(calls[0]).toContain('--ignore-scripts')
+  })
+})
+
+/**
+ * `datacore update` rewrote the root repo's tracked
+ * .datacore/modules/package-lock.json on every run (seen on a fresh Ubuntu
+ * 24.04 install), leaving the root repo dirty, which then blocks the next
+ * merge from upstream. The lock file is input, not output.
+ */
+describe('ensureModuleDeps leaves the tracked lock file alone', () => {
+  const LOCK = '{"name":"modules","lockfileVersion":3,"packages":{}}\n'
+  function withLock(): string {
+    const d = fixture()
+    mkdirSync(join(d, '.datacore', 'modules'), { recursive: true })
+    writeFileSync(join(d, '.datacore', 'modules', 'package.json'), '{"dependencies":{}}')
+    writeFileSync(join(d, '.datacore', 'modules', 'package-lock.json'), LOCK)
+    return d
+  }
+  it('installs from the lock with npm ci when there is one', () => {
+    const d = withLock()
+    const calls: string[][] = []
+    expect(ensureModuleDeps(d, (cmd, args) => { calls.push([cmd, ...args]); return { ok: true } })).toEqual([])
+    expect(calls[0]).toEqual(['npm', 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'])
+  })
+  it('leaves package-lock.json byte-identical even if npm rewrites it', () => {
+    const d = withLock()
+    const lock = join(d, '.datacore', 'modules', 'package-lock.json')
+    // Make ci fail so the fallback install runs, and have it rewrite the lock as npm does.
+    const run = (_cmd: string, args: string[]) => {
+      if (args[0] === 'ci') return { ok: false, stderr: 'lock out of sync' }
+      writeFileSync(lock, '{"rewritten":true}\n')
+      return { ok: true }
+    }
+    expect(ensureModuleDeps(d, run)).toEqual([])
+    expect(readFileSync(lock, 'utf-8')).toBe(LOCK)
+  })
+  it('does not reinstall when node_modules is already newer than package.json and the lock', () => {
+    const d = withLock()
+    const nm = join(d, '.datacore', 'modules', 'node_modules')
+    mkdirSync(nm, { recursive: true })
+    const hidden = join(nm, '.package-lock.json')
+    writeFileSync(hidden, '{}')
+    const later = new Date(Date.now() + 60_000)
+    utimesSync(hidden, later, later)
+    expect(ensureModuleDeps(d, () => { throw new Error('should not run') })).toEqual([])
   })
 })

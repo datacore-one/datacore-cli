@@ -16,7 +16,7 @@ import { mergeUpstream, upgradeMcpPackages } from './selfupdate'
 import { richOutput } from './output'
 import { createInterface } from 'readline'
 import { detectPlatform, getInstallCommand, type Platform } from './platform'
-import { updateModules, listModules } from './module'
+import { updateModules, listModules, tallyModuleResults } from './module'
 import { dataDir } from './paths'
 import { createSnapshot, saveSnapshot } from './snapshot'
 import { pullAll } from './sync'
@@ -184,7 +184,13 @@ function updateRepos(
     console.log(`${c.bold}Repositories${c.reset}`)
   }
 
-  const pullResults = pullAll({ stream: false })
+  const pullResults = pullAll({
+    stream: false,
+    onRegistry: (notice) => {
+      if (isTTY) console.log(`  ${c.dim}${notice}${c.reset}`)
+      result.warnings.push(notice)
+    },
+  })
 
   // A forked install's `origin` is the user's own fork, which GitHub never
   // syncs, so the pull above brings in nothing from upstream. Merge upstream
@@ -244,27 +250,24 @@ function updateModulesStep(
   }
 
   const results = updateModules()
-
-  let updated = 0
-  let upToDate = 0
-  let failed = 0
+  const t = tallyModuleResults(results)
 
   for (const r of results) {
-    if (r.updated) {
-      updated++
-      result.updated.push(`Module: ${r.name}`)
-    } else if (r.error) {
-      failed++
-      result.warnings.push(`Module ${r.name}: ${r.error}`)
-    } else {
-      upToDate++
-    }
+    if (r.updated) result.updated.push(`Module: ${r.name}${r.reattached ? ` (back on ${r.reattached} from a detached HEAD)` : ''}`)
+    else if (r.error) result.warnings.push(`Module ${r.name}: ${r.error.split('\n')[0]}`)
   }
 
   if (isTTY) {
-    if (updated > 0) console.log(`  ${c.green}✓${c.reset} ${updated} module(s) updated`)
-    if (upToDate > 0) console.log(`  ${c.green}✓${c.reset} ${upToDate} module(s) already current`)
-    if (failed > 0) console.log(`  ${c.yellow}⚠${c.reset} ${failed} module(s) failed to update`)
+    if (t.updated > 0) console.log(`  ${c.green}✓${c.reset} ${t.updated} module(s) updated`)
+    if (t.current > 0) console.log(`  ${c.green}✓${c.reset} ${t.current} module(s) already current`)
+    // Core modules ship inside the root repo and moved with it above.
+    if (t.core > 0) console.log(`  ${c.green}✓${c.reset} ${t.core} core module(s) ${c.dim}(part of Datacore, updated with it)${c.reset}`)
+    if (t.failed > 0) {
+      console.log(`  ${c.yellow}⚠${c.reset} ${t.failed} module(s) failed to update`)
+      for (const r of results.filter((x) => x.error)) {
+        console.log(`    ${c.dim}${r.name}: ${r.error!.split('\n')[0]}${c.reset}`)
+      }
+    }
     console.log()
   }
 }
